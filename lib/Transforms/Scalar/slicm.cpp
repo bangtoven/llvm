@@ -70,6 +70,7 @@
 #include "llvm/Analysis/ProfileInfo.h"
 
 using namespace llvm;
+using namespace std;
 
 STATISTIC(NumSunk      , "Number of instructions sunk out of loop");
 STATISTIC(NumHoisted   , "Number of instructions hoisted out of loop");
@@ -124,6 +125,8 @@ namespace {
         
         ProfileInfo* PI;
         LAMPLoadProfile *LLP;
+        typedef map<pair<Instruction*, Instruction*>*, unsigned int> DTT;
+        DTT DepToTimesMap;
         
         // State that is updated as we process loops.
         bool Changed;            // Set to true when we change anything.
@@ -241,6 +244,8 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
     PI = &getAnalysis<ProfileInfo>();
     LLP = &getAnalysis<LAMPLoadProfile>();
     
+    DepToTimesMap = LLP->DepToTimesMap;
+    
     CurAST = new AliasSetTracker(*AA);
     // Collect Alias info from subloops.
     for (Loop::iterator LoopItr = L->begin(), LoopItrE = L->end();
@@ -283,6 +288,49 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
              (I != E) && !MayThrow; ++I)
             MayThrow |= I->mayThrow();
     
+    for (Loop::block_iterator BB = L->block_begin(), BBE = L->block_end(); (BB != BBE); ++BB) {
+        for (BasicBlock::iterator I = (*BB)->begin(), E = (*BB)->end(); (I != E); ++I) {
+            if (isa<LoadInst>(I)) {
+                errs() << "Load inst\t";
+                if (L->hasLoopInvariantOperands(I)) {
+                    if (findEligibleLoads(*I)) {
+                        BasicBlock *homeBB = I->getParent();
+                        BasicBlock *restBB = SplitBlock(homeBB, I, this);
+                        BasicBlock *redoBB = SplitEdge(homeBB, restBB, this);
+                        
+                        AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()),
+                                                          "flag",
+                                                          homeBB->getTerminator());
+                        
+                        LoadInst *LD = new LoadInst(flag,
+                                                    "load flag",
+                                                    homeBB);
+                        
+                        StoreInst *ST = new StoreInst(ConstantInt::getFalse(homeBB->getContext()),
+                                                      flag,
+                                                      redoBB->getTerminator());
+                        
+                        BranchInst::Create(redoBB, restBB, flag, homeBB->getTerminator());
+                        
+                        for (DTT::iterator di = DepToTimesMap.begin(); di != DepToTimesMap.end(); di++) {
+                            pair<Instruction*, Instruction*>* insts = di->first; // instruction pair
+                            if (insts->first == I) {
+                                errs() << "-" << *(insts->second) << "\tCount:" << di->second << "\n";
+                            }
+                        }
+                        
+                    } else {
+                        errs() << "not eligible\n";
+                    }
+                } else {
+                    errs() << "variant\n";
+                }
+            } else {
+                errs() << "No Load inst.\n";
+            }
+        }
+    }
+    
     // We want to visit all of the instructions in this loop... that are not parts
     // of our subloops (they have already had their invariants hoisted out of
     // their loop, into this loop, so there is no need to process the BODIES of
@@ -324,10 +372,15 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
 }
 
 bool SLICM::findEligibleLoads(Instruction &I) {
+    if (I.getOpcode() != Instruction::Load) {
+        errs() << "The inst = " << I << " is not Load" << "\n";
+        return false;
+    }
     // Assumes that I is a load instruction
     for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i){
         Value *V = I.getOperand(i);
         Instruction *temp = dyn_cast<Instruction>(V);
+        if (temp == NULL) break;
         for(Value::use_iterator UI = temp->use_begin(), E = temp->use_end(); UI != E; ++UI){
             Instruction *User = dyn_cast<Instruction>(*UI);
             if(CurLoop->contains(User)){
