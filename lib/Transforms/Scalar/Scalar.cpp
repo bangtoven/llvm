@@ -99,6 +99,10 @@ void LLVMAddLICMPass(LLVMPassManagerRef PM) {
   unwrap(PM)->add(createLICMPass());
 }
 
+void LLVMAddSLICMPass(LLVMPassManagerRef PM) {
+    unwrap(PM)->add(createSLICMPass());
+}
+
 void LLVMAddLoopDeletionPass(LLVMPassManagerRef PM) {
   unwrap(PM)->add(createLoopDeletionPass());
 }
