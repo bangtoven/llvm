@@ -123,11 +123,6 @@ namespace {
         DataLayout *TD;          // DataLayout for constant folding.
         TargetLibraryInfo *TLI;  // TargetLibraryInfo for constant folding.
         
-        ProfileInfo* PI;
-        LAMPLoadProfile *LLP;
-        typedef map<pair<Instruction*, Instruction*>*, unsigned int> DTT;
-        DTT DepToTimesMap;
-        
         // State that is updated as we process loops.
         bool Changed;            // Set to true when we change anything.
         BasicBlock *Preheader;   // The preheader block of the current loop...
@@ -207,6 +202,14 @@ namespace {
                              SmallVectorImpl<BasicBlock*> &ExitBlocks,
                              SmallVectorImpl<Instruction*> &InsertPts);
         
+        // Added by Jungho Bang
+        ProfileInfo* PI;
+        LAMPLoadProfile *LLP;
+        typedef map<pair<Instruction*, Instruction*>*, unsigned int> DTT;
+        DTT DepToTimesMap;
+        
+        set<LoadInst*> *hoistedLoads = new set<LoadInst*>();
+        
         bool findEligibleLoads(Instruction &I);
     };
 }
@@ -222,8 +225,8 @@ char SLICM::ID = 0;
  INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
  INITIALIZE_PASS_END(SLICM, "slicm", "Loop Invariant Code Motion", false, false)
 */
- Pass *llvm::createSLICMPass() { return new SLICM(); }
- 
+Pass *llvm::createSLICMPass() { return new SLICM(); }
+
 static RegisterPass<SLICM> X("slicm", "Speculative Loop Invariant Code Motion");
 
 /// Hoist expressions out of the specified loop. Note, alias info for inner
@@ -241,9 +244,9 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
     TD = getAnalysisIfAvailable<DataLayout>();
     TLI = &getAnalysis<TargetLibraryInfo>();
     
+    // JB
     PI = &getAnalysis<ProfileInfo>();
     LLP = &getAnalysis<LAMPLoadProfile>();
-    
     DepToTimesMap = LLP->DepToTimesMap;
     
     CurAST = new AliasSetTracker(*AA);
@@ -288,49 +291,6 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
              (I != E) && !MayThrow; ++I)
             MayThrow |= I->mayThrow();
     
-    for (Loop::block_iterator BB = L->block_begin(), BBE = L->block_end(); (BB != BBE); ++BB) {
-        for (BasicBlock::iterator I = (*BB)->begin(), E = (*BB)->end(); (I != E); ++I) {
-            if (isa<LoadInst>(I)) {
-                errs() << "Load inst\t";
-                if (L->hasLoopInvariantOperands(I)) {
-                    if (findEligibleLoads(*I)) {
-                        BasicBlock *homeBB = I->getParent();
-                        BasicBlock *restBB = SplitBlock(homeBB, I, this);
-                        BasicBlock *redoBB = SplitEdge(homeBB, restBB, this);
-                        
-                        AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()),
-                                                          "flag",
-                                                          homeBB->getTerminator());
-                        
-                        LoadInst *LD = new LoadInst(flag,
-                                                    "load flag",
-                                                    homeBB);
-                        
-                        StoreInst *ST = new StoreInst(ConstantInt::getFalse(homeBB->getContext()),
-                                                      flag,
-                                                      redoBB->getTerminator());
-                        
-                        BranchInst::Create(redoBB, restBB, flag, homeBB->getTerminator());
-                        
-                        for (DTT::iterator di = DepToTimesMap.begin(); di != DepToTimesMap.end(); di++) {
-                            pair<Instruction*, Instruction*>* insts = di->first; // instruction pair
-                            if (insts->first == I) {
-                                errs() << "-" << *(insts->second) << "\tCount:" << di->second << "\n";
-                            }
-                        }
-                        
-                    } else {
-                        errs() << "not eligible\n";
-                    }
-                } else {
-                    errs() << "variant\n";
-                }
-            } else {
-                errs() << "No Load inst.\n";
-            }
-        }
-    }
-    
     // We want to visit all of the instructions in this loop... that are not parts
     // of our subloops (they have already had their invariants hoisted out of
     // their loop, into this loop, so there is no need to process the BODIES of
@@ -343,8 +303,58 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
     //
     if (L->hasDedicatedExits())
         SinkRegion(DT->getNode(L->getHeader()));
-    if (Preheader)
+    if (Preheader) {
         HoistRegion(DT->getNode(L->getHeader()));
+        
+//        vector<LoadInst*> *insts = new vector<LoadInst*>();
+//
+//        for (Loop::block_iterator BB = L->block_begin(), BBE = L->block_end(); (BB != BBE); ++BB) {
+//            for (BasicBlock::iterator I = (*BB)->begin(), E = (*BB)->end(); (I != E); ++I) {
+//                if (isa<LoadInst>(I)) {
+//                    errs() << "Load inst\t";
+//                    if (L->hasLoopInvariantOperands(I)) {
+//                        if (findEligibleLoads(*I)) {
+//                            LoadInst *LI = dyn_cast<LoadInst>(I);
+//                            insts->push_back(LI);
+//                        } else {
+//                            errs() << "not eligible\n";
+//                        }
+//                    } else {
+//                        errs() << "variant\n";
+//                    }
+//                } else {
+//                    errs() << "No Load inst.\n";
+//                }
+//            }
+//        }
+//
+//        LoadInst* I = insts->at(0);
+//
+//        BasicBlock *homeBB = I->getParent();
+//        BasicBlock *restBB = SplitBlock(homeBB, I, this);
+//        BasicBlock *redoBB = SplitEdge(homeBB, restBB, this);
+//
+//        AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()),
+//                                          "flag",
+//                                          homeBB->getTerminator());
+//
+//        LoadInst *LD = new LoadInst(flag,
+//                                    "load flag",
+//                                    homeBB);
+//
+//        StoreInst *ST = new StoreInst(ConstantInt::getFalse(homeBB->getContext()),
+//                                      flag,
+//                                      redoBB->getTerminator());
+//
+//        BranchInst::Create(redoBB, restBB, flag, homeBB->getTerminator());
+//
+//        for (DTT::iterator di = DepToTimesMap.begin(); di != DepToTimesMap.end(); di++) {
+//            pair<Instruction*, Instruction*>* insts = di->first; // instruction pair
+//            if (insts->first == I) {
+//                errs() << "-" << *(insts->second) << "\tCount:" << di->second << "\n";
+//            }
+//        }
+    }
     
     // Now that all loop invariants have been removed from the loop, promote any
     // memory references to scalars that we can.
@@ -477,9 +487,27 @@ void SLICM::HoistRegion(DomTreeNode *N) {
             // if all of the operands of the instruction are loop invariant and if it
             // is safe to hoist the instruction.
             //
-            if (CurLoop->hasLoopInvariantOperands(&I) && canSinkOrHoistInst(I) &&
-                isSafeToExecuteUnconditionally(I))
-                hoist(I);
+            if (CurLoop->hasLoopInvariantOperands(&I) && isSafeToExecuteUnconditionally(I)) {
+                if (canSinkOrHoistInst(I)) { // same situation as the template code
+                    hoist(I);
+                } else {
+                    errs() << "Could be eligible: ";
+                    LoadInst *LI = dyn_cast<LoadInst>(&I);
+                    if (LI == NULL)
+                        errs() << "Not LOAD instruction.\n";
+                    else if (!LI->isUnordered())
+                        errs() << "Don't hoist volatile/atomic loads\n";
+                    else if (hoistedLoads->find(LI) != hoistedLoads->end())
+                        errs() << "Already hoisted.\n";
+                    else if (findEligibleLoads(*LI) == false)
+                        errs() << "Not eligible to hoist.\n";
+                    else {
+                        errs() << "Then do something!!!\n";
+                        
+                        hoistedLoads->insert(LI);
+                    }
+                }
+            }
         }
     
     const std::vector<DomTreeNode*> &Children = N->getChildren();
