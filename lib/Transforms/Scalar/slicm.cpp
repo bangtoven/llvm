@@ -209,6 +209,7 @@ namespace {
         DTT DepToTimesMap;
         
         set<LoadInst*> *hoistedLoads = new set<LoadInst*>();
+        set<BasicBlock*> *redoBBs = new set<BasicBlock*>();
         
         bool findEligibleLoads(Instruction &I);
     };
@@ -304,56 +305,8 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
     if (L->hasDedicatedExits())
         SinkRegion(DT->getNode(L->getHeader()));
     if (Preheader) {
+        // Edit HoistRegion
         HoistRegion(DT->getNode(L->getHeader()));
-        
-//        vector<LoadInst*> *insts = new vector<LoadInst*>();
-//
-//        for (Loop::block_iterator BB = L->block_begin(), BBE = L->block_end(); (BB != BBE); ++BB) {
-//            for (BasicBlock::iterator I = (*BB)->begin(), E = (*BB)->end(); (I != E); ++I) {
-//                if (isa<LoadInst>(I)) {
-//                    errs() << "Load inst\t";
-//                    if (L->hasLoopInvariantOperands(I)) {
-//                        if (findEligibleLoads(*I)) {
-//                            LoadInst *LI = dyn_cast<LoadInst>(I);
-//                            insts->push_back(LI);
-//                        } else {
-//                            errs() << "not eligible\n";
-//                        }
-//                    } else {
-//                        errs() << "variant\n";
-//                    }
-//                } else {
-//                    errs() << "No Load inst.\n";
-//                }
-//            }
-//        }
-//
-//        LoadInst* I = insts->at(0);
-//
-//        BasicBlock *homeBB = I->getParent();
-//        BasicBlock *restBB = SplitBlock(homeBB, I, this);
-//        BasicBlock *redoBB = SplitEdge(homeBB, restBB, this);
-//
-//        AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()),
-//                                          "flag",
-//                                          homeBB->getTerminator());
-//
-//        LoadInst *LD = new LoadInst(flag,
-//                                    "load flag",
-//                                    homeBB);
-//
-//        StoreInst *ST = new StoreInst(ConstantInt::getFalse(homeBB->getContext()),
-//                                      flag,
-//                                      redoBB->getTerminator());
-//
-//        BranchInst::Create(redoBB, restBB, flag, homeBB->getTerminator());
-//
-//        for (DTT::iterator di = DepToTimesMap.begin(); di != DepToTimesMap.end(); di++) {
-//            pair<Instruction*, Instruction*>* insts = di->first; // instruction pair
-//            if (insts->first == I) {
-//                errs() << "-" << *(insts->second) << "\tCount:" << di->second << "\n";
-//            }
-//        }
     }
     
     // Now that all loop invariants have been removed from the loop, promote any
@@ -465,6 +418,12 @@ void SLICM::HoistRegion(DomTreeNode *N) {
     // If this subregion is not in the top level loop at all, exit.
     if (!CurLoop->contains(BB)) return;
     
+    // if you can find this BB in redoBB sets
+    if (redoBBs->find(BB) != redoBBs->end()) {
+        errs() << "This node is created by SLICM. Skip it.\n";
+        return;
+    }
+    
     // Only need to process the contents of this block if it is not part of a
     // subloop (which would already have been processed).
     if (!inSubLoop(BB))
@@ -487,11 +446,17 @@ void SLICM::HoistRegion(DomTreeNode *N) {
             // if all of the operands of the instruction are loop invariant and if it
             // is safe to hoist the instruction.
             //
+            
+            // ??????????
+//            Instruction *i = dyn_cast<Instruction>(&I);
+//            if (i == NULL)
+//                return;
+            
             if (CurLoop->hasLoopInvariantOperands(&I) && isSafeToExecuteUnconditionally(I)) {
                 if (canSinkOrHoistInst(I)) { // same situation as the template code
                     hoist(I);
                 } else {
-                    errs() << "Could be eligible: ";
+                    errs() << "Could be hoisted: ";
                     LoadInst *LI = dyn_cast<LoadInst>(&I);
                     if (LI == NULL)
                         errs() << "Not LOAD instruction.\n";
@@ -504,12 +469,51 @@ void SLICM::HoistRegion(DomTreeNode *N) {
                     else {
                         errs() << "Then do something!!!\n";
                         
-                        hoistedLoads->insert(LI);
+                        BasicBlock *homeBB = LI->getParent();
+                        BasicBlock *restBB = SplitBlock(homeBB, LI, this);
+                        BasicBlock *redoBB = SplitEdge(homeBB, restBB, this);
+                        
+                        // hoist to preheader
+                        hoist(*LI);
+                        hoistedLoads->insert(LI); // track what we hoisted...
+                        
+                        // move clone to redoBB
+                        LoadInst *cloned = (LoadInst*)LI->clone();
+                        cloned->insertBefore(redoBB->getTerminator());
+                        hoistedLoads->insert(cloned); // we want to skip this too.
+                        
+                        // Preheader: flag = 0;
+                        AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()), "flag", Preheader->getTerminator()); // Int1Ty flag; ??
+                        StoreInst *storePreheader = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag, Preheader->getTerminator()); // flag = false; ??
+                        
+                        // redoBB: flag = 0;
+                        StoreInst *storeRedoBB = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag, redoBB->getTerminator());
+                        
+                        // homeBB: if(flag) goto redoBB
+                        LoadInst *loadFlag = new LoadInst(flag, "loadflag", homeBB->getTerminator());
+                        BranchInst *branch = BranchInst::Create(redoBB, restBB, loadFlag, homeBB->getTerminator());
+                        
+                        redoBBs->insert(redoBB);
+                        
+                        // For StoreInst that could be dependent - runtime.
+                        for (DTT::iterator di = DepToTimesMap.begin(); di != DepToTimesMap.end(); di++) {
+                            pair<Instruction*, Instruction*>* insts = di->first; // instruction pair
+                            if (insts->first == LI) {
+                                if (StoreInst *si = dyn_cast<StoreInst>(insts->second)){
+                                    // should change flag value
+                                    errs() << "-" << *si << "\tCount:" << di->second << "\n";
+                                    
+                                    ICmpInst *compare = new ICmpInst(CmpInst::ICMP_EQ, LI->getPointerOperand(), si->getPointerOperand());
+                                    StoreInst *storeFlagChange = new StoreInst(compare, flag, si);
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     
+    // How to skip new BBs (redo, rest)?
     const std::vector<DomTreeNode*> &Children = N->getChildren();
     for (unsigned i = 0, e = Children.size(); i != e; ++i)
         HoistRegion(Children[i]);
