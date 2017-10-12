@@ -117,7 +117,7 @@ namespace {
         
     private:
         AliasAnalysis *AA;       // Current AliasAnalysis information
-        LoopInfo      *LI;       // Current LoopInfo
+        LoopInfo      *LInfo;       // Current LoopInfo
         DominatorTree *DT;       // Dominator Tree for the current Loop.
         
         DataLayout *TD;          // DataLayout for constant folding.
@@ -161,7 +161,7 @@ namespace {
         ///
         bool inSubLoop(BasicBlock *BB) {
             assert(CurLoop->contains(BB) && "Only valid if BB is IN the loop");
-            return LI->getLoopFor(BB) != CurLoop;
+            return LInfo->getLoopFor(BB) != CurLoop;
         }
         
         /// sink - When an instruction is found to only be used outside of the loop,
@@ -211,7 +211,8 @@ namespace {
         set<LoadInst*> *hoistedLoads = new set<LoadInst*>();
         set<BasicBlock*> *redoBBs = new set<BasicBlock*>();
         
-        bool findEligibleLoads(Instruction &I);
+        bool isEligibleLoad(Instruction &I);
+        list<StoreInst*> findStoreAliases(LoadInst *LI);
     };
 }
 
@@ -238,7 +239,7 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
     Changed = false;
     
     // Get our Loop and Alias Analysis information...
-    LI = &getAnalysis<LoopInfo>();
+    LInfo = &getAnalysis<LoopInfo>();
     AA = &getAnalysis<AliasAnalysis>();
     DT = &getAnalysis<DominatorTree>();
     
@@ -279,7 +280,7 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
     for (Loop::block_iterator I = L->block_begin(), E = L->block_end();
          I != E; ++I) {
         BasicBlock *BB = *I;
-        if (LI->getLoopFor(BB) == L)        // Ignore blocks in subloops.
+        if (LInfo->getLoopFor(BB) == L)        // Ignore blocks in subloops.
             CurAST->add(*BB);                 // Incorporate the specified basic block
     }
     
@@ -332,30 +333,6 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
     else
         delete CurAST;
     return Changed;
-}
-
-bool SLICM::findEligibleLoads(Instruction &I) {
-    if (I.getOpcode() != Instruction::Load) {
-        errs() << "The inst = " << I << " is not Load" << "\n";
-        return false;
-    }
-    // Assumes that I is a load instruction
-    for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i){
-        Value *V = I.getOperand(i);
-        Instruction *temp = dyn_cast<Instruction>(V);
-        if (temp == NULL) break;
-        for(Value::use_iterator UI = temp->use_begin(), E = temp->use_end(); UI != E; ++UI){
-            Instruction *User = dyn_cast<Instruction>(*UI);
-            if(CurLoop->contains(User)){
-                if(isa<StoreInst>(User)){
-                    //errs() << "Dependent instruction " << *User << "\n";
-                    return false;
-                }
-            }
-        }
-    }
-    errs() << "The inst = " << I << " is ELIGIBLE LOAD" << "\n";
-    return true;
 }
 
 /// SinkRegion - Walk the specified region of the CFG (defined by all blocks
@@ -420,13 +397,15 @@ void SLICM::HoistRegion(DomTreeNode *N) {
     
     // if you can find this BB in redoBB sets
     if (redoBBs->find(BB) != redoBBs->end()) {
-        errs() << "This node is created by SLICM. Skip it.\n";
+        errs() << "This Block is created by SLICM. Skip it.\n";
         return;
     }
     
     // Only need to process the contents of this block if it is not part of a
     // subloop (which would already have been processed).
-    if (!inSubLoop(BB))
+    if (!inSubLoop(BB)){
+        list<LoadInst*> *loadList = new list<LoadInst*>();
+        
         for (BasicBlock::iterator II = BB->begin(), E = BB->end(); II != E; ) {
             Instruction &I = *II++;
             
@@ -446,77 +425,134 @@ void SLICM::HoistRegion(DomTreeNode *N) {
             // if all of the operands of the instruction are loop invariant and if it
             // is safe to hoist the instruction.
             //
-            
-            // ??????????
-//            Instruction *i = dyn_cast<Instruction>(&I);
-//            if (i == NULL)
-//                return;
-            
             if (CurLoop->hasLoopInvariantOperands(&I) && isSafeToExecuteUnconditionally(I)) {
                 if (canSinkOrHoistInst(I)) { // same situation as the template code
                     hoist(I);
                 } else {
                     errs() << "Could be hoisted: ";
-                    LoadInst *LI = dyn_cast<LoadInst>(&I);
-                    if (LI == NULL)
+                    LoadInst *li = dyn_cast<LoadInst>(&I);
+                    if (li == NULL)
                         errs() << "Not LOAD instruction.\n";
-                    else if (!LI->isUnordered())
+                    else if (!li->isUnordered())
                         errs() << "Don't hoist volatile/atomic loads\n";
-                    else if (hoistedLoads->find(LI) != hoistedLoads->end())
+                    else if (hoistedLoads->find(li) != hoistedLoads->end())
                         errs() << "Already hoisted.\n";
-                    else if (findEligibleLoads(*LI) == false)
+                    else if (isEligibleLoad(*li) == false)
                         errs() << "Not eligible to hoist.\n";
                     else {
                         errs() << "Then do something!!!\n";
-                        
-                        BasicBlock *homeBB = LI->getParent();
-                        BasicBlock *restBB = SplitBlock(homeBB, LI, this);
-                        BasicBlock *redoBB = SplitEdge(homeBB, restBB, this);
-                        
-                        // hoist to preheader
-                        hoist(*LI);
-                        hoistedLoads->insert(LI); // track what we hoisted...
-                        
-                        // move clone to redoBB
-                        LoadInst *cloned = (LoadInst*)LI->clone();
-                        cloned->insertBefore(redoBB->getTerminator());
-                        hoistedLoads->insert(cloned); // we want to skip this too.
-                        
-                        // Preheader: flag = 0;
-                        AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()), "flag", Preheader->getTerminator()); // Int1Ty flag; ??
-                        StoreInst *storePreheader = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag, Preheader->getTerminator()); // flag = false; ??
-                        
-                        // redoBB: flag = 0;
-                        StoreInst *storeRedoBB = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag, redoBB->getTerminator());
-                        
-                        // homeBB: if(flag) goto redoBB
-                        LoadInst *loadFlag = new LoadInst(flag, "loadflag", homeBB->getTerminator());
-                        BranchInst *branch = BranchInst::Create(redoBB, restBB, loadFlag, homeBB->getTerminator());
-                        
-                        redoBBs->insert(redoBB);
-                        
-                        // For StoreInst that could be dependent - runtime.
-                        for (DTT::iterator di = DepToTimesMap.begin(); di != DepToTimesMap.end(); di++) {
-                            pair<Instruction*, Instruction*>* insts = di->first; // instruction pair
-                            if (insts->first == LI) {
-                                if (StoreInst *si = dyn_cast<StoreInst>(insts->second)){
-                                    // should change flag value
-                                    errs() << "-" << *si << "\tCount:" << di->second << "\n";
-                                    
-                                    ICmpInst *compare = new ICmpInst(CmpInst::ICMP_EQ, LI->getPointerOperand(), si->getPointerOperand());
-                                    StoreInst *storeFlagChange = new StoreInst(compare, flag, si);
-                                }
-                            }
-                        }
+                        loadList->push_back(li);
                     }
                 }
             }
         }
+        
+        int c = 0;
+        for (LoadInst *li : *loadList) {
+            c++;
+            string count = to_string(c);
+            
+            errs() << "For Load: " << *li << "\n";
+            
+            BasicBlock *homeBB = li->getParent();
+            BasicBlock *redoBB = SplitBlock(homeBB, li, this);
+            BasicBlock *restBB = SplitBlock(redoBB, li->getNextNode(), this);
+            redoBB->setName(homeBB->getName() + "-REDO");
+            restBB->setName(homeBB->getName() + "-REST");
+            homeBB->setName(homeBB->getName() + "-HOME");
+            
+            // Preheader
+            // hoist load to preheader
+            hoist(*li);
+            hoistedLoads->insert(li); // track what we hoisted...
+            li->setName("LOAD" + count);
+            // New Variable for LoadResult
+            AllocaInst *var = new AllocaInst(li->getType(), "VAR" + count);
+            var->insertBefore(li);
+            StoreInst *varPreheader = new StoreInst(li, var);
+            varPreheader->insertAfter(li);
+            // flag = 0;
+            AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()), "FLAG" + count);
+            flag->insertBefore(Preheader->getTerminator());
+            StoreInst *flagPreheader = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag);
+            flagPreheader->insertAfter(flag);
+            
+            // RedoBB
+            // move clone to redoBB
+            LoadInst *cloned = (LoadInst*)li->clone();
+            cloned->setName("LOAD" + count + "-CL");
+            cloned->insertBefore(redoBB->getTerminator());
+            // Store it to variable
+            StoreInst *varRedoBB = new StoreInst(cloned, var);
+            varRedoBB->insertAfter(cloned);
+            // flag = 0;
+            StoreInst *flagRedoBB = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag);
+            flagRedoBB->insertBefore(redoBB->getTerminator());
+            // track RedoBB that we created
+            redoBBs->insert(redoBB);
+            
+            // HomeBB
+            // load flag
+            LoadInst *loadFlag = new LoadInst(flag, "loadFLAG" + count);
+            loadFlag->insertBefore(homeBB->getTerminator());
+            // if(flag) goto redoBB
+            homeBB->getTerminator()->eraseFromParent();
+            BranchInst::Create(redoBB, restBB, loadFlag, homeBB);
+            
+            // For StoreInst that could be dependent
+            for (StoreInst *si : findStoreAliases(li)) {
+                errs() << "Alias: " << *si << "\n";
+                
+                ICmpInst *compare = new ICmpInst(CmpInst::ICMP_EQ, li->getPointerOperand(), si->getPointerOperand());
+                compare->setName("COMPARE" + count);
+                compare->insertAfter(si);
+                
+                StoreInst *storeFlagChange = new StoreInst(compare, flag);
+                storeFlagChange->insertAfter(compare);
+            }
+        }
+    }
     
     // How to skip new BBs (redo, rest)?
     const std::vector<DomTreeNode*> &Children = N->getChildren();
     for (unsigned i = 0, e = Children.size(); i != e; ++i)
         HoistRegion(Children[i]);
+}
+
+list<StoreInst*> SLICM::findStoreAliases(LoadInst *LI) {
+    list<StoreInst*> insts = list<StoreInst*>();
+    uint64_t Size = 0;
+    if (LI->getType()->isSized())
+        Size = AA->getTypeStoreSize(LI->getType());
+    for (auto ptr : CurAST->getAliasSetForPointer(LI->getOperand(0), Size, LI->getMetadata(LLVMContext::MD_tbaa))) {
+        Value * v = ptr.getValue();
+        for(auto u = v->use_begin(); u != v->use_end(); u++) {
+            StoreInst *user = dyn_cast<StoreInst>(*u);
+            if(user != NULL)
+                insts.push_back(user);
+        }
+    }
+    return insts;
+}
+
+bool SLICM::isEligibleLoad(Instruction &I) {
+    // Assumes that I is a load instruction
+    for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i){
+        Value *V = I.getOperand(i);
+        Instruction *temp = dyn_cast<Instruction>(V);
+        if (temp == NULL) break;
+        for(Value::use_iterator UI = temp->use_begin(), E = temp->use_end(); UI != E; ++UI){
+            Instruction *User = dyn_cast<Instruction>(*UI);
+            if(CurLoop->contains(User)){
+                if(isa<StoreInst>(User)){
+                    //errs() << "Dependent instruction " << *User << "\n";
+                    return false;
+                }
+            }
+        }
+    }
+    errs() << "The inst = " << I << " is ELIGIBLE LOAD" << "\n";
+    return true;
 }
 
 /// canSinkOrHoistInst - Return true if the hoister and sinker can handle this
