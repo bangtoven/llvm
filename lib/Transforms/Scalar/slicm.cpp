@@ -457,9 +457,9 @@ void SLICM::HoistRegion(DomTreeNode *N) {
             BasicBlock *homeBB = li->getParent();
             BasicBlock *redoBB = SplitBlock(homeBB, li, this);
             BasicBlock *restBB = SplitBlock(redoBB, li->getNextNode(), this);
-            redoBB->setName(homeBB->getName() + "-REDO");
-            restBB->setName(homeBB->getName() + "-REST");
-            homeBB->setName(homeBB->getName() + "-HOME");
+            homeBB->setName("HOME_BB" + count + "_" + homeBB->getName());
+            redoBB->setName("REDO_BB" + count);
+            restBB->setName("REST_BB" + count);
             
             // Preheader
             // hoist load to preheader
