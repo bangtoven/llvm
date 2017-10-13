@@ -210,9 +210,14 @@ namespace {
         
         set<LoadInst*> *hoistedLoads = new set<LoadInst*>();
         set<BasicBlock*> *redoBBs = new set<BasicBlock*>();
+        set<Instruction*> *varLoadsAndStores = new set<Instruction*>();
         
+        void HoistRegionSLICM(DomTreeNode *N);
         bool isEligibleLoad(Instruction &I);
         list<StoreInst*> findStoreAliases(LoadInst *LI);
+        
+        AllocaInst* hoistCloneAndStoreToStack(Instruction *I, BasicBlock *redoBB);
+        void findUseAndReplaceWithVar(Instruction *I, Value *v, BasicBlock *redoBB);
     };
 }
 
@@ -307,7 +312,7 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
         SinkRegion(DT->getNode(L->getHeader()));
     if (Preheader) {
         // Edit HoistRegion
-        HoistRegion(DT->getNode(L->getHeader()));
+        HoistRegionSLICM(DT->getNode(L->getHeader()));
     }
     
     // Now that all loop invariants have been removed from the loop, promote any
@@ -388,7 +393,46 @@ void SLICM::SinkRegion(DomTreeNode *N) {
 /// first order w.r.t the DominatorTree.  This allows us to visit definitions
 /// before uses, allowing us to hoist a loop body in one pass without iteration.
 ///
-void SLICM::HoistRegion(DomTreeNode *N) {
+//void SLICM::HoistRegion(DomTreeNode *N) {
+//    assert(N != 0 && "Null dominator tree node?");
+//    BasicBlock *BB = N->getBlock();
+//
+//    // If this subregion is not in the top level loop at all, exit.
+//    if (!CurLoop->contains(BB)) return;
+//
+//    // Only need to process the contents of this block if it is not part of a
+//    // subloop (which would already have been processed).
+//    if (!inSubLoop(BB))
+//        for (BasicBlock::iterator II = BB->begin(), E = BB->end(); II != E; ) {
+//            Instruction &I = *II++;
+//
+//            // Try constant folding this instruction.  If all the operands are
+//            // constants, it is technically hoistable, but it would be better to just
+//            // fold it.
+//            if (Constant *C = ConstantFoldInstruction(&I, TD, TLI)) {
+//                DEBUG(dbgs() << "SLICM folding inst: " << I << "  --> " << *C << '\n');
+//                CurAST->copyValue(&I, C);
+//                CurAST->deleteValue(&I);
+//                I.replaceAllUsesWith(C);
+//                I.eraseFromParent();
+//                continue;
+//            }
+//
+//            // Try hoisting the instruction out to the preheader.  We can only do this
+//            // if all of the operands of the instruction are loop invariant and if it
+//            // is safe to hoist the instruction.
+//            //
+//            if (CurLoop->hasLoopInvariantOperands(&I) && canSinkOrHoistInst(I) &&
+//                isSafeToExecuteUnconditionally(I))
+//                hoist(I);
+//        }
+//
+//    const std::vector<DomTreeNode*> &Children = N->getChildren();
+//    for (unsigned i = 0, e = Children.size(); i != e; ++i)
+//        HoistRegion(Children[i]);
+//}
+
+void SLICM::HoistRegionSLICM(DomTreeNode *N) {
     assert(N != 0 && "Null dominator tree node?");
     BasicBlock *BB = N->getBlock();
     
@@ -461,31 +505,17 @@ void SLICM::HoistRegion(DomTreeNode *N) {
             redoBB->setName("REDO_BB" + count);
             restBB->setName("REST_BB" + count);
             
-            // Preheader
-            // hoist load to preheader
-            hoist(*li);
-            hoistedLoads->insert(li); // track what we hoisted...
             li->setName("LOAD" + count);
-            // New Variable for LoadResult
-            AllocaInst *var = new AllocaInst(li->getType(), "VAR" + count);
-            var->insertBefore(li);
-            StoreInst *varPreheader = new StoreInst(li, var);
-            varPreheader->insertAfter(li);
-            // flag = 0;
+            Value *v = hoistCloneAndStoreToStack(li, redoBB);
+            hoistedLoads->insert(li); // track what we hoisted...
+            
+            // Preheader
             AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()), "FLAG" + count);
-            flag->insertBefore(Preheader->getTerminator());
+            flag->insertBefore(Preheader->begin());
             StoreInst *flagPreheader = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag);
-            flagPreheader->insertAfter(flag);
+            flagPreheader->insertBefore(Preheader->getTerminator());
             
             // RedoBB
-            // move clone to redoBB
-            LoadInst *cloned = (LoadInst*)li->clone();
-            cloned->setName("LOAD" + count + "-CL");
-            cloned->insertBefore(redoBB->getTerminator());
-            // Store it to variable
-            StoreInst *varRedoBB = new StoreInst(cloned, var);
-            varRedoBB->insertAfter(cloned);
-            // flag = 0;
             StoreInst *flagRedoBB = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag);
             flagRedoBB->insertBefore(redoBB->getTerminator());
             // track RedoBB that we created
@@ -510,14 +540,83 @@ void SLICM::HoistRegion(DomTreeNode *N) {
                 StoreInst *storeFlagChange = new StoreInst(compare, flag);
                 storeFlagChange->insertAfter(compare);
             }
+            
+            findUseAndReplaceWithVar(li, v, redoBB);
         }
     }
     
     // How to skip new BBs (redo, rest)?
     const std::vector<DomTreeNode*> &Children = N->getChildren();
     for (unsigned i = 0, e = Children.size(); i != e; ++i)
-        HoistRegion(Children[i]);
+        HoistRegionSLICM(Children[i]);
 }
+
+AllocaInst* SLICM::hoistCloneAndStoreToStack(Instruction *I, BasicBlock *redoBB) {
+    // Hoist
+    hoist(*I);
+    
+    // New Variable for it
+    AllocaInst *var = new AllocaInst(I->getType(), I->getName()+"-VAR");
+    var->insertBefore(Preheader->begin());
+    
+    // Store it to var
+    StoreInst *varPreheader = new StoreInst(I, var);
+    varPreheader->insertAfter(I);
+    
+    varLoadsAndStores->insert(varPreheader);
+    
+    // Clone to redoBB
+    Instruction *cloned = I->clone();
+    cloned->setName(I->getName() + "_cl");
+    cloned->insertBefore(redoBB->getTerminator());
+    
+    // Store it to var
+    StoreInst *varRedoBB = new StoreInst(cloned, var);
+    varRedoBB->insertAfter(cloned);
+    
+    return var;
+}
+
+void SLICM::findUseAndReplaceWithVar(Instruction *I, Value *v, BasicBlock *redoBB) {
+    for (Value::use_iterator UI = I->use_begin(), E = I->use_end(); UI != E; ++UI){
+        Instruction *user = dyn_cast<Instruction>(*UI);
+        if (isa<LoadInst>(user))
+            continue;
+        else if (varLoadsAndStores->find(user) != varLoadsAndStores->end()) {
+            errs() << "Generated by SLICM. Skip it.\n";
+            continue;
+        }
+        
+        errs() << "User: " << *user << "\n";
+        errs() << "- hasLoopInvariantOperands: " << CurLoop->hasLoopInvariantOperands(user) << "\n";
+        errs() << "- isSafeToExecuteUnconditionally: " << isSafeToExecuteUnconditionally(*user) << "\n";
+        errs() << "- canSinkOrHoistInst: " << canSinkOrHoistInst(*user) << "\n";
+        
+        if (CurLoop->hasLoopInvariantOperands(user) && isSafeToExecuteUnconditionally(*user) && canSinkOrHoistInst(*user)) {
+            hoist(*user);
+            // New Variable for it
+            AllocaInst *var = hoistCloneAndStoreToStack(user, redoBB);
+            
+            LoadInst *loadVar = new LoadInst(v, "LOAD_"+I->getName());
+            loadVar->insertBefore(user);
+            user->replaceUsesOfWith(I, loadVar);
+            
+//            new AllocaInst(user->getType(), user->getName()+"-VAR");
+//            var->insertBefore(Preheader->begin());
+//            StoreInst *varPreheader = new StoreInst(user, var);
+//            varPreheader->insertAfter(user);
+//            Instruction *cloned = user->clone();
+//            cloned->insertBefore(redoBB->getTerminator());
+//            // Store it to variable
+//            StoreInst *varRedoBB = new StoreInst(cloned, var);
+//            varRedoBB->insertAfter(cloned);
+            
+            errs() << "recursively~ ";
+            findUseAndReplaceWithVar(user, var, redoBB);
+        }
+    }
+}
+
 
 list<StoreInst*> SLICM::findStoreAliases(LoadInst *LI) {
     list<StoreInst*> insts = list<StoreInst*>();
@@ -525,11 +624,11 @@ list<StoreInst*> SLICM::findStoreAliases(LoadInst *LI) {
     if (LI->getType()->isSized())
         Size = AA->getTypeStoreSize(LI->getType());
     for (auto ptr : CurAST->getAliasSetForPointer(LI->getOperand(0), Size, LI->getMetadata(LLVMContext::MD_tbaa))) {
-        Value * v = ptr.getValue();
+        Value *v = ptr.getValue();
         for(auto u = v->use_begin(); u != v->use_end(); u++) {
-            StoreInst *user = dyn_cast<StoreInst>(*u);
-            if(user != NULL)
-                insts.push_back(user);
+            Instruction *i = dyn_cast<Instruction>(*u);
+            if(isa<StoreInst>(i))
+                insts.push_back(dyn_cast<StoreInst>(i));
         }
     }
     return insts;
