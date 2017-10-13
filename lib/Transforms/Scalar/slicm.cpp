@@ -218,6 +218,7 @@ namespace {
         
         LoadInst* hoistCloneAndStoreToStack(Instruction *I, LoadInst *depend, BasicBlock *redoBB);
         void findUseAndReplaceWithVar(Instruction *I, LoadInst *v, BasicBlock *redoBB);
+        void cleanUpRedundantLoadStorePair(BasicBlock *BB);
     };
 }
 
@@ -393,45 +394,6 @@ void SLICM::SinkRegion(DomTreeNode *N) {
 /// first order w.r.t the DominatorTree.  This allows us to visit definitions
 /// before uses, allowing us to hoist a loop body in one pass without iteration.
 ///
-//void SLICM::HoistRegion(DomTreeNode *N) {
-//    assert(N != 0 && "Null dominator tree node?");
-//    BasicBlock *BB = N->getBlock();
-//
-//    // If this subregion is not in the top level loop at all, exit.
-//    if (!CurLoop->contains(BB)) return;
-//
-//    // Only need to process the contents of this block if it is not part of a
-//    // subloop (which would already have been processed).
-//    if (!inSubLoop(BB))
-//        for (BasicBlock::iterator II = BB->begin(), E = BB->end(); II != E; ) {
-//            Instruction &I = *II++;
-//
-//            // Try constant folding this instruction.  If all the operands are
-//            // constants, it is technically hoistable, but it would be better to just
-//            // fold it.
-//            if (Constant *C = ConstantFoldInstruction(&I, TD, TLI)) {
-//                DEBUG(dbgs() << "SLICM folding inst: " << I << "  --> " << *C << '\n');
-//                CurAST->copyValue(&I, C);
-//                CurAST->deleteValue(&I);
-//                I.replaceAllUsesWith(C);
-//                I.eraseFromParent();
-//                continue;
-//            }
-//
-//            // Try hoisting the instruction out to the preheader.  We can only do this
-//            // if all of the operands of the instruction are loop invariant and if it
-//            // is safe to hoist the instruction.
-//            //
-//            if (CurLoop->hasLoopInvariantOperands(&I) && canSinkOrHoistInst(I) &&
-//                isSafeToExecuteUnconditionally(I))
-//                hoist(I);
-//        }
-//
-//    const std::vector<DomTreeNode*> &Children = N->getChildren();
-//    for (unsigned i = 0, e = Children.size(); i != e; ++i)
-//        HoistRegion(Children[i]);
-//}
-
 void SLICM::HoistRegionSLICM(DomTreeNode *N) {
     assert(N != 0 && "Null dominator tree node?");
     BasicBlock *BB = N->getBlock();
@@ -475,15 +437,15 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
                 } else {
                     errs() << "Could be hoisted: ";
                     LoadInst *li = dyn_cast<LoadInst>(&I);
-                    if (li == NULL)
+                    if (li == NULL) {
                         errs() << "Not LOAD instruction.\n";
-                    else if (!li->isUnordered())
+                    } else if (!li->isUnordered()) {
                         errs() << "Don't hoist volatile/atomic loads\n";
-                    else if (hoistedLoads->find(li) != hoistedLoads->end())
+                    } else if (hoistedLoads->find(li) != hoistedLoads->end()) {
                         errs() << "Already hoisted.\n";
-                    else if (isEligibleLoad(*li) == false)
+                    } else if (isEligibleLoad(*li) == false) {
                         errs() << "Not eligible to hoist.\n";
-                    else {
+                    } else {
                         errs() << "Then do something!!!\n";
                         loadList->push_back(li);
                     }
@@ -512,22 +474,9 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
             // Preheader
             AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()), "FLAG" + count);
             flag->insertBefore(Preheader->begin());
-            StoreInst *flagPreheader = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag);
-            flagPreheader->insertBefore(Preheader->getTerminator());
             
-            // RedoBB
-            StoreInst *flagRedoBB = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag);
-            flagRedoBB->insertBefore(redoBB->getTerminator());
             // track RedoBB that we created
             redoBBs->insert(redoBB);
-            
-            // HomeBB
-            // load flag
-            LoadInst *loadFlag = new LoadInst(flag, "Var_FLAG" + count);
-            loadFlag->insertBefore(homeBB->getTerminator());
-            // if(flag) goto redoBB
-            homeBB->getTerminator()->eraseFromParent();
-            BranchInst::Create(redoBB, restBB, loadFlag, homeBB);
             
             // For StoreInst that could be dependent
             for (StoreInst *si : findStoreAliases(li)) {
@@ -542,6 +491,20 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
             }
             
             findUseAndReplaceWithVar(li, v, redoBB);
+            
+            cleanUpRedundantLoadStorePair(Preheader);
+            cleanUpRedundantLoadStorePair(redoBB);
+            
+            // Set Flag false
+            StoreInst *falseFlag = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag);
+            falseFlag->insertBefore(Preheader->getTerminator());
+            falseFlag->clone()->insertBefore(redoBB->getTerminator());
+            
+            // HomeBB: if(flag) goto redoBB
+            LoadInst *loadFlag = new LoadInst(flag, "load_FLAG" + count);
+            loadFlag->insertBefore(homeBB->getTerminator());
+            homeBB->getTerminator()->eraseFromParent();
+            BranchInst::Create(redoBB, restBB, loadFlag, homeBB);
         }
     }
     
@@ -549,6 +512,19 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
     const std::vector<DomTreeNode*> &Children = N->getChildren();
     for (unsigned i = 0, e = Children.size(); i != e; ++i)
         HoistRegionSLICM(Children[i]);
+}
+
+void SLICM::cleanUpRedundantLoadStorePair(BasicBlock *BB) {
+    for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
+        if (StoreInst *s = dyn_cast<StoreInst>(I)) {
+            if (LoadInst *l = dyn_cast<LoadInst>(s->getNextNode())) {
+                if (s->getPointerOperand() == l->getPointerOperand()) {
+                    l->replaceAllUsesWith(s->getValueOperand());
+                    l->eraseFromParent();
+                }
+            }
+        }
+    }
 }
 
 LoadInst* SLICM::hoistCloneAndStoreToStack(Instruction *I, LoadInst *depend, BasicBlock *redoBB) {
@@ -563,14 +539,6 @@ LoadInst* SLICM::hoistCloneAndStoreToStack(Instruction *I, LoadInst *depend, Bas
     StoreInst *varPreheader = new StoreInst(I, var);
     varPreheader->insertAfter(I);
     
-    // Load it to something
-//    LoadInst *result;
-//    if (isa<LoadInst>(I))
-//        result = dyn_cast<LoadInst>(I);
-//    else {
-        LoadInst *result = new LoadInst(var, "load_" + I->getName());
-//    }
-    
     // Add it to the bookkeeping set
     varLoadsAndStores->insert(varPreheader);
     
@@ -578,6 +546,10 @@ LoadInst* SLICM::hoistCloneAndStoreToStack(Instruction *I, LoadInst *depend, Bas
     Instruction *cloned = I->clone();
     cloned->setName(I->getName() + "_cl");
     cloned->insertBefore(redoBB->getTerminator());
+    
+    // Store it to var
+    StoreInst *varRedoBB = new StoreInst(cloned, var);
+    varRedoBB->insertAfter(cloned);
     
     if (depend != NULL) {
         depend->insertBefore(I);
@@ -588,10 +560,7 @@ LoadInst* SLICM::hoistCloneAndStoreToStack(Instruction *I, LoadInst *depend, Bas
         cloned->replaceUsesOfWith(depend, depCloned);
     }
     
-    // Store it to var
-    StoreInst *varRedoBB = new StoreInst(cloned, var);
-    varRedoBB->insertAfter(cloned);
-    
+    LoadInst *result = new LoadInst(var, "load_" + I->getName());
     return result;
 }
 
@@ -606,11 +575,6 @@ void SLICM::findUseAndReplaceWithVar(Instruction *I, LoadInst *v, BasicBlock *re
         }
         
         user->replaceUsesOfWith(I, v);
-        
-        errs() << "User: " << *user << "\n";
-        errs() << "- hasLoopInvariantOperands: " << CurLoop->hasLoopInvariantOperands(user) << "\n";
-        errs() << "- isSafeToExecuteUnconditionally: " << isSafeToExecuteUnconditionally(*user) << "\n";
-        errs() << "- canSinkOrHoistInst: " << canSinkOrHoistInst(*user) << "\n";
         
         if (CurLoop->hasLoopInvariantOperands(user) && isSafeToExecuteUnconditionally(*user) && canSinkOrHoistInst(*user)) {
 //            hoist(*user);
