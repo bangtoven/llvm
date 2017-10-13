@@ -218,7 +218,11 @@ namespace {
         
         LoadInst* hoistCloneAndStoreToStack(Instruction *I, LoadInst *depend, BasicBlock *redoBB);
         void findUseAndReplaceWithVar(Instruction *I, LoadInst *v, BasicBlock *redoBB);
+        
         void cleanUpRedundantLoadStorePair(BasicBlock *BB);
+        
+        set<AllocaInst*> *allocatedInsts = new set<AllocaInst*>();
+        void removeUnnecessaryAllocas();
     };
 }
 
@@ -506,12 +510,38 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
             homeBB->getTerminator()->eraseFromParent();
             BranchInst::Create(redoBB, restBB, loadFlag, homeBB);
         }
+        
+        removeUnnecessaryAllocas();
     }
     
     // How to skip new BBs (redo, rest)?
     const std::vector<DomTreeNode*> &Children = N->getChildren();
     for (unsigned i = 0, e = Children.size(); i != e; ++i)
         HoistRegionSLICM(Children[i]);
+}
+
+void SLICM::removeUnnecessaryAllocas() {
+    for (AllocaInst *a : *allocatedInsts) {
+        bool otherThanStore = false;
+        set<StoreInst*> *storeInsts = new set<StoreInst*>();
+        for (Value::use_iterator UI = a->use_begin(), E = a->use_end(); UI != E; ++UI){
+            if (StoreInst *s = dyn_cast<StoreInst>(*UI)) {
+                storeInsts->insert(s);
+            } else {
+                otherThanStore = true;
+                break;
+            }
+        }
+        if (otherThanStore)
+            errs() << *a <<" has usage other than store.\n";
+        else {
+            errs() << *a <<" has only store usage. We can erase it.\n";
+            for (StoreInst *s : *storeInsts) {
+                s->eraseFromParent();
+            }
+            a->eraseFromParent();
+        }
+    }
 }
 
 void SLICM::cleanUpRedundantLoadStorePair(BasicBlock *BB) {
@@ -534,6 +564,7 @@ LoadInst* SLICM::hoistCloneAndStoreToStack(Instruction *I, LoadInst *depend, Bas
     // New Variable for it
     AllocaInst *var = new AllocaInst(I->getType(), I->getName()+"-var");
     var->insertBefore(Preheader->begin());
+    allocatedInsts->insert(var);
     
     // Store it to var
     StoreInst *varPreheader = new StoreInst(I, var);
