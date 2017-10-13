@@ -216,8 +216,8 @@ namespace {
         bool isEligibleLoad(Instruction &I);
         list<StoreInst*> findStoreAliases(LoadInst *LI);
         
-        AllocaInst* hoistCloneAndStoreToStack(Instruction *I, BasicBlock *redoBB);
-        void findUseAndReplaceWithVar(Instruction *I, Value *v, BasicBlock *redoBB);
+        LoadInst* hoistCloneAndStoreToStack(Instruction *I, LoadInst *depend, BasicBlock *redoBB);
+        void findUseAndReplaceWithVar(Instruction *I, LoadInst *v, BasicBlock *redoBB);
     };
 }
 
@@ -505,8 +505,8 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
             redoBB->setName("REDO_BB" + count);
             restBB->setName("REST_BB" + count);
             
-            li->setName("LOAD" + count);
-            Value *v = hoistCloneAndStoreToStack(li, redoBB);
+            li->setName("LD" + count);
+            LoadInst *v = hoistCloneAndStoreToStack(li, NULL, redoBB);
             hoistedLoads->insert(li); // track what we hoisted...
             
             // Preheader
@@ -523,7 +523,7 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
             
             // HomeBB
             // load flag
-            LoadInst *loadFlag = new LoadInst(flag, "loadFLAG" + count);
+            LoadInst *loadFlag = new LoadInst(flag, "Var_FLAG" + count);
             loadFlag->insertBefore(homeBB->getTerminator());
             // if(flag) goto redoBB
             homeBB->getTerminator()->eraseFromParent();
@@ -551,18 +551,27 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
         HoistRegionSLICM(Children[i]);
 }
 
-AllocaInst* SLICM::hoistCloneAndStoreToStack(Instruction *I, BasicBlock *redoBB) {
+LoadInst* SLICM::hoistCloneAndStoreToStack(Instruction *I, LoadInst *depend, BasicBlock *redoBB) {
     // Hoist
     hoist(*I);
     
     // New Variable for it
-    AllocaInst *var = new AllocaInst(I->getType(), I->getName()+"-VAR");
+    AllocaInst *var = new AllocaInst(I->getType(), I->getName()+"-var");
     var->insertBefore(Preheader->begin());
     
     // Store it to var
     StoreInst *varPreheader = new StoreInst(I, var);
     varPreheader->insertAfter(I);
     
+    // Load it to something
+//    LoadInst *result;
+//    if (isa<LoadInst>(I))
+//        result = dyn_cast<LoadInst>(I);
+//    else {
+        LoadInst *result = new LoadInst(var, "load_" + I->getName());
+//    }
+    
+    // Add it to the bookkeeping set
     varLoadsAndStores->insert(varPreheader);
     
     // Clone to redoBB
@@ -570,14 +579,23 @@ AllocaInst* SLICM::hoistCloneAndStoreToStack(Instruction *I, BasicBlock *redoBB)
     cloned->setName(I->getName() + "_cl");
     cloned->insertBefore(redoBB->getTerminator());
     
+    if (depend != NULL) {
+        depend->insertBefore(I);
+        
+        Instruction *depCloned = depend->clone();
+        depCloned->setName(depend->getName() + "_cl");
+        depCloned->insertBefore(cloned);
+        cloned->replaceUsesOfWith(depend, depCloned);
+    }
+    
     // Store it to var
     StoreInst *varRedoBB = new StoreInst(cloned, var);
     varRedoBB->insertAfter(cloned);
     
-    return var;
+    return result;
 }
 
-void SLICM::findUseAndReplaceWithVar(Instruction *I, Value *v, BasicBlock *redoBB) {
+void SLICM::findUseAndReplaceWithVar(Instruction *I, LoadInst *v, BasicBlock *redoBB) {
     for (Value::use_iterator UI = I->use_begin(), E = I->use_end(); UI != E; ++UI){
         Instruction *user = dyn_cast<Instruction>(*UI);
         if (isa<LoadInst>(user))
@@ -587,19 +605,21 @@ void SLICM::findUseAndReplaceWithVar(Instruction *I, Value *v, BasicBlock *redoB
             continue;
         }
         
+        user->replaceUsesOfWith(I, v);
+        
         errs() << "User: " << *user << "\n";
         errs() << "- hasLoopInvariantOperands: " << CurLoop->hasLoopInvariantOperands(user) << "\n";
         errs() << "- isSafeToExecuteUnconditionally: " << isSafeToExecuteUnconditionally(*user) << "\n";
         errs() << "- canSinkOrHoistInst: " << canSinkOrHoistInst(*user) << "\n";
         
         if (CurLoop->hasLoopInvariantOperands(user) && isSafeToExecuteUnconditionally(*user) && canSinkOrHoistInst(*user)) {
-            hoist(*user);
+//            hoist(*user);
             // New Variable for it
-            AllocaInst *var = hoistCloneAndStoreToStack(user, redoBB);
+            LoadInst *var = hoistCloneAndStoreToStack(user, v, redoBB);
             
-            LoadInst *loadVar = new LoadInst(v, "LOAD_"+I->getName());
-            loadVar->insertBefore(user);
-            user->replaceUsesOfWith(I, loadVar);
+//            LoadInst *loadVar = new LoadInst(v, "Var_"+I->getName());
+//            loadVar->insertBefore(user);
+//            user->replaceUsesOfWith(I, var);
             
 //            new AllocaInst(user->getType(), user->getName()+"-VAR");
 //            var->insertBefore(Preheader->begin());
@@ -613,6 +633,8 @@ void SLICM::findUseAndReplaceWithVar(Instruction *I, Value *v, BasicBlock *redoB
             
             errs() << "recursively~ ";
             findUseAndReplaceWithVar(user, var, redoBB);
+        } else {
+            v->insertBefore(user);
         }
     }
 }
