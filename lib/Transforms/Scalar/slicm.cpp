@@ -315,10 +315,8 @@ bool SLICM::runOnLoop(Loop *L, LPPassManager &LPM) {
     //
     if (L->hasDedicatedExits())
         SinkRegion(DT->getNode(L->getHeader()));
-    if (Preheader) {
-        // Edit HoistRegion
+    if (Preheader)
         HoistRegionSLICM(DT->getNode(L->getHeader()));
-    }
     
     // Now that all loop invariants have been removed from the loop, promote any
     // memory references to scalars that we can.
@@ -538,8 +536,10 @@ void SLICM::removeUnnecessaryAllocas() {
             errs() << *a <<" has only store usage. We can erase it.\n";
             for (StoreInst *s : *storeInsts) {
                 s->eraseFromParent();
+                varLoadsAndStores->erase(s);
             }
             a->eraseFromParent();
+            allocatedInsts->erase(a);
         }
     }
 }
@@ -551,6 +551,7 @@ void SLICM::cleanUpRedundantLoadStorePair(BasicBlock *BB) {
                 if (s->getPointerOperand() == l->getPointerOperand()) {
                     l->replaceAllUsesWith(s->getValueOperand());
                     l->eraseFromParent();
+                    varLoadsAndStores->erase(l);
                 }
             }
         }
@@ -608,24 +609,7 @@ void SLICM::findUseAndReplaceWithVar(Instruction *I, LoadInst *v, BasicBlock *re
         user->replaceUsesOfWith(I, v);
         
         if (CurLoop->hasLoopInvariantOperands(user) && isSafeToExecuteUnconditionally(*user) && canSinkOrHoistInst(*user)) {
-//            hoist(*user);
-            // New Variable for it
             LoadInst *var = hoistCloneAndStoreToStack(user, v, redoBB);
-            
-//            LoadInst *loadVar = new LoadInst(v, "Var_"+I->getName());
-//            loadVar->insertBefore(user);
-//            user->replaceUsesOfWith(I, var);
-            
-//            new AllocaInst(user->getType(), user->getName()+"-VAR");
-//            var->insertBefore(Preheader->begin());
-//            StoreInst *varPreheader = new StoreInst(user, var);
-//            varPreheader->insertAfter(user);
-//            Instruction *cloned = user->clone();
-//            cloned->insertBefore(redoBB->getTerminator());
-//            // Store it to variable
-//            StoreInst *varRedoBB = new StoreInst(cloned, var);
-//            varRedoBB->insertAfter(cloned);
-            
             errs() << "recursively~ ";
             findUseAndReplaceWithVar(user, var, redoBB);
         } else {
@@ -633,7 +617,6 @@ void SLICM::findUseAndReplaceWithVar(Instruction *I, LoadInst *v, BasicBlock *re
         }
     }
 }
-
 
 list<StoreInst*> SLICM::findStoreAliases(LoadInst *LI) {
     list<StoreInst*> insts = list<StoreInst*>();
