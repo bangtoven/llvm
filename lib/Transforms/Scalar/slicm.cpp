@@ -68,6 +68,7 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "LAMP/LAMPLoadProfile.h"
 #include "llvm/Analysis/ProfileInfo.h"
+#include <sstream>
 
 using namespace llvm;
 using namespace std;
@@ -237,7 +238,9 @@ char SLICM::ID = 0;
  INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
  INITIALIZE_PASS_END(SLICM, "slicm", "Loop Invariant Code Motion", false, false)
 */
+#ifdef JB_LOCAL_ENV
 Pass *llvm::createSLICMPass() { return new SLICM(); }
+#endif
 
 static RegisterPass<SLICM> X("slicm", "Speculative Loop Invariant Code Motion");
 
@@ -458,7 +461,9 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
         int c = 0;
         for (LoadInst *li : *loadList) {
             c++;
-            string count = to_string(c);
+            std::ostringstream ss;
+            ss << c;
+            string count = ss.str();
             
             errs() << "For Load: " << *li << "\n";
             

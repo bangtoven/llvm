@@ -15,6 +15,10 @@
 #ifndef LLVM_TRANSFORMS_SCALAR_H
 #define LLVM_TRANSFORMS_SCALAR_H
 
+#ifndef JB_LOCAL_ENV
+#define JB_LOCAL_ENV
+#endif
+
 namespace llvm {
 
 class FunctionPass;
