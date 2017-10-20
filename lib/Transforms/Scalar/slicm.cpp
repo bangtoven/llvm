@@ -213,6 +213,8 @@ namespace {
         set<BasicBlock*> *redoBBs = new set<BasicBlock*>();
         set<Instruction*> *varLoadsAndStores = new set<Instruction*>();
         
+        int hoistingCount = 0;
+        
         void HoistRegionSLICM(DomTreeNode *N);
         bool isEligibleLoad(Instruction &I);
         list<StoreInst*> findStoreAliases(LoadInst *LI);
@@ -458,28 +460,27 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
             }
         }
         
-        int c = 0;
         for (LoadInst *li : *loadList) {
-            c++;
+            hoistingCount++;
             std::ostringstream ss;
-            ss << c;
-            string count = ss.str();
+            ss << hoistingCount;
+            string countStr = ss.str();
             
             errs() << "For Load: " << *li << "\n";
             
             BasicBlock *homeBB = li->getParent();
             BasicBlock *redoBB = SplitBlock(homeBB, li, this);
             BasicBlock *restBB = SplitBlock(redoBB, li->getNextNode(), this);
-            homeBB->setName("HOME_BB" + count + "_" + homeBB->getName());
-            redoBB->setName("REDO_BB" + count);
-            restBB->setName("REST_BB" + count);
+            homeBB->setName("HOME_BB" + countStr + "_" + homeBB->getName());
+            redoBB->setName("REDO_BB" + countStr);
+            restBB->setName("REST_BB" + countStr);
             
-            li->setName("LD" + count);
+            li->setName("LD" + countStr);
             LoadInst *v = hoistCloneAndStoreToStack(li, NULL, redoBB);
             hoistedLoads->insert(li); // track what we hoisted...
             
             // Preheader
-            AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()), "FLAG" + count);
+            AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()), "FLAG" + countStr);
             flag->insertBefore(Preheader->begin());
             
             // track RedoBB that we created
@@ -490,7 +491,7 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
                 errs() << "Alias: " << *si << "\n";
                 
                 ICmpInst *compare = new ICmpInst(CmpInst::ICMP_EQ, li->getPointerOperand(), si->getPointerOperand());
-                compare->setName("COMPARE" + count);
+                compare->setName("COMPARE" + countStr);
                 compare->insertAfter(si);
                 
                 StoreInst *storeFlagChange = new StoreInst(compare, flag);
@@ -508,7 +509,7 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
             falseFlag->clone()->insertBefore(redoBB->getTerminator());
             
             // HomeBB: if(flag) goto redoBB
-            LoadInst *loadFlag = new LoadInst(flag, "load_FLAG" + count);
+            LoadInst *loadFlag = new LoadInst(flag, "load_FLAG" + countStr);
             loadFlag->insertBefore(homeBB->getTerminator());
             homeBB->getTerminator()->eraseFromParent();
             BranchInst::Create(redoBB, restBB, loadFlag, homeBB);
@@ -628,9 +629,11 @@ list<StoreInst*> SLICM::findStoreAliases(LoadInst *LI) {
     uint64_t Size = 0;
     if (LI->getType()->isSized())
         Size = AA->getTypeStoreSize(LI->getType());
-    for (auto ptr : CurAST->getAliasSetForPointer(LI->getOperand(0), Size, LI->getMetadata(LLVMContext::MD_tbaa))) {
-        Value *v = ptr.getValue();
-        for(auto u = v->use_begin(); u != v->use_end(); u++) {
+    AliasSet& AS = CurAST->getAliasSetForPointer(LI->getOperand(0), Size, LI->getMetadata(LLVMContext::MD_tbaa));
+    
+    for (AliasSet::iterator ASI = AS.begin(), E = AS.end(); ASI != E; ++ASI) {
+        Value *v = ASI->getValue();
+        for(Value::use_iterator u = v->use_begin(); u != v->use_end(); u++) {
             Instruction *i = dyn_cast<Instruction>(*u);
             if(isa<StoreInst>(i))
                 insts.push_back(dyn_cast<StoreInst>(i));
