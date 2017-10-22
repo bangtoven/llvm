@@ -481,7 +481,7 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
             
             // Preheader
             AllocaInst *flag = new AllocaInst(Type::getInt1Ty(homeBB->getContext()), "FLAG" + countStr);
-            flag->insertBefore(Preheader->begin());
+            flag->insertBefore(Preheader->getParent()->getEntryBlock().begin());
             
             // track RedoBB that we created
             redoBBs->insert(redoBB);
@@ -500,8 +500,8 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
             
             findUseAndReplaceWithVar(li, v, redoBB);
             
-            cleanUpRedundantLoadStorePair(Preheader);
-            cleanUpRedundantLoadStorePair(redoBB);
+//            cleanUpRedundantLoadStorePair(Preheader);
+//            cleanUpRedundantLoadStorePair(redoBB);
             
             // Set Flag false
             StoreInst *falseFlag = new StoreInst(ConstantInt::getFalse(homeBB->getContext()), flag);
@@ -515,7 +515,7 @@ void SLICM::HoistRegionSLICM(DomTreeNode *N) {
             BranchInst::Create(redoBB, restBB, loadFlag, homeBB);
         }
         
-        removeUnnecessaryAllocas();
+//        removeUnnecessaryAllocas();
     }
     
     // How to skip new BBs (redo, rest)?
@@ -570,7 +570,7 @@ LoadInst* SLICM::hoistCloneAndStoreToStack(Instruction *I, LoadInst *depend, Bas
     
     // New Variable for it
     AllocaInst *var = new AllocaInst(I->getType(), I->getName()+"-var");
-    var->insertBefore(Preheader->begin());
+    var->insertBefore(Preheader->getParent()->getEntryBlock().begin());
     allocatedInsts->insert(var);
     
     // Store it to var
