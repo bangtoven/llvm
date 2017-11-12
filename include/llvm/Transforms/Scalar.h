@@ -117,6 +117,8 @@ FunctionPass *createInstructionCombiningPass();
 Pass *createLICMPass();
     Pass *createSLICMPass();
 
+    Pass *createMyUnrollPass();
+
 //===----------------------------------------------------------------------===//
 //
 // LoopStrengthReduce - This pass is strength reduces GEP instructions that use

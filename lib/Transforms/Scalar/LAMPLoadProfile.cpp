@@ -168,13 +168,13 @@ bool LAMPLoadProfile::runOnModule(Module& M)
 		std::cerr << "Could not find file result.lamp.profile\n";
 		return false;
 	}
-	try{
+//    try{
 		ifs.open("result.lamp.profile");
 		//llvm::errs() << "Opened result.lamp.profile\n";
-	}catch (...){
-		std::cerr << "Could not find file result.lamp.profile\n";
-		return false;
-	}
+//    }catch (...){
+//        std::cerr << "Could not find file result.lamp.profile\n";
+//        return false;
+//    }
 	std::string s;
 	// discard the first three strings ("BEGIN" "Memory" "Profile")
 	ifs >> s; ifs >> s; ifs >> s;

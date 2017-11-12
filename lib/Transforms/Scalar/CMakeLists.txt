@@ -2,6 +2,7 @@ include_directories(include)
 
 add_llvm_library(LLVMScalarOpts
   slicm.cpp
+  MyUnrollPass.cpp
   LAMPProfiling.cpp
   LAMPLoadProfile.cpp
   ADCE.cpp

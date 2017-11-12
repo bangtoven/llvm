@@ -187,6 +187,7 @@ void PassManagerBuilder::populateModulePassManager(PassManagerBase &MPM) {
   MPM.add(createLoopRotatePass());            // Rotate Loop
   MPM.add(createLICMPass());                  // Hoist loop invariants
     MPM.add(createSLICMPass());
+    MPM.add(createMyUnrollPass());
   MPM.add(createLoopUnswitchPass(SizeLevel || OptLevel < 3));
   MPM.add(createInstructionCombiningPass());
   MPM.add(createIndVarSimplifyPass());        // Canonicalize indvars
@@ -315,6 +316,7 @@ void PassManagerBuilder::populateLTOPassManager(PassManagerBase &PM,
 
   PM.add(createLICMPass());                 // Hoist loop invariants.
     PM.add(createSLICMPass());
+    PM.add(createMyUnrollPass());
   PM.add(createGVNPass(DisableGVNLoadPRE)); // Remove redundancies.
   PM.add(createMemCpyOptPass());            // Remove dead memcpys.
   // Nuke dead stores.

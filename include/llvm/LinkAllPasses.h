@@ -91,6 +91,7 @@ namespace {
       (void) llvm::createLCSSAPass();
       (void) llvm::createLICMPass();
         (void) llvm::createSLICMPass();
+        (void) llvm::createMyUnrollPass();
       (void) llvm::createLazyValueInfoPass();
       (void) llvm::createLoopExtractorPass();
       (void) llvm::createLoopSimplifyPass();
