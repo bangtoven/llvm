@@ -118,6 +118,7 @@ Pass *createLICMPass();
     Pass *createSLICMPass();
 
     Pass *createMyUnrollPass();
+    Pass *createTimeMeasurePass();
 
 //===----------------------------------------------------------------------===//
 //

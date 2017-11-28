@@ -107,6 +107,10 @@ void LLVMAddMyUnrollPass(LLVMPassManagerRef PM) {
     unwrap(PM)->add(createMyUnrollPass());
 }
 
+void LLVMAddTimeMeasurePass(LLVMPassManagerRef PM) {
+    unwrap(PM)->add(createTimeMeasurePass());
+}
+
 void LLVMAddLoopDeletionPass(LLVMPassManagerRef PM) {
   unwrap(PM)->add(createLoopDeletionPass());
 }
