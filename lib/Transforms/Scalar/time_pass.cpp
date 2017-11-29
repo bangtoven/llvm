@@ -138,6 +138,9 @@ namespace {
             //get preheader and loop exit to insert time instruction
             BasicBlock* Preheader = L->getLoopPreheader();
             BasicBlock* exitingBlock = L->getExitBlock();
+            if (exitingBlock == NULL)
+                return;
+            
             unsigned long loop_index = loop_count;
             ++loop_count;
             unsigned long loop_id_hash = mod_hash + loop_index;

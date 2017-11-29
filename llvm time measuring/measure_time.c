@@ -35,7 +35,7 @@ void recordExit(unsigned long index) {
 void printFinally(unsigned long programID) {
     FILE *file=fopen("loop_exec_time.bin", "ab");
     for (int i=0; i<ARRAY_SIZE; i++) {
-        if (data[i].entryTime == 0) break; // empty item
+        if (data[i].entryTime == 0) continue; // empty item
         
         unsigned long id = programID + i; // hash + index
         fwrite(&id,sizeof(unsigned long),1,file);
