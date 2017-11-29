@@ -8,8 +8,8 @@
 unsigned long programID;
 
 typedef struct LoopExecTime {
-    clock_t entryTime;
-    clock_t exitTime;
+    double entryTime;
+    double exitTime;
 } LoopExecTime;
 LoopExecTime data[ARRAY_SIZE];
 
@@ -22,10 +22,6 @@ double getCurrentTime() {
     return ts.tv_sec + ts.tv_nsec/1000000000.0;
 }
 
-void prepareMeasuring(unsigned long hash) {
-    programID = hash;
-}
-
 void recordEntry(unsigned long index) {
     if (data[index].entryTime > 0) return; // already recorded entry time
     data[index].entryTime = getCurrentTime();
@@ -36,7 +32,7 @@ void recordExit(unsigned long index) {
     data[index].exitTime = getCurrentTime();
 }
 
-void printFinally() {
+void printFinally(unsigned long programID) {
     FILE *file=fopen("loop_exec_time.bin", "ab");
     for (int i=0; i<ARRAY_SIZE; i++) {
         if (data[i].entryTime == 0) break; // empty item
@@ -44,7 +40,7 @@ void printFinally() {
         double id = programID + i; // hash + index
         fwrite(&id,sizeof(double),1,file);
         
-        double duration = ((double)data[i].exitTime - data[i].entryTime)/CLOCKS_PER_SEC;
+        double duration = data[i].exitTime - data[i].entryTime;
         fwrite(&duration,sizeof(double),1,file);
     }
     fclose(file);
