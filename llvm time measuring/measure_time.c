@@ -37,8 +37,8 @@ void printFinally(unsigned long programID) {
     for (int i=0; i<ARRAY_SIZE; i++) {
         if (data[i].entryTime == 0) break; // empty item
         
-        double id = programID + i; // hash + index
-        fwrite(&id,sizeof(double),1,file);
+        unsigned long id = programID + i; // hash + index
+        fwrite(&id,sizeof(unsigned long),1,file);
         
         double duration = data[i].exitTime - data[i].entryTime;
         fwrite(&duration,sizeof(double),1,file);

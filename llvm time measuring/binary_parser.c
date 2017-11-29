@@ -18,7 +18,7 @@ int main(int argc, const char * argv[]) {
     struct LoopExecData buffer;
     while (fread(&buffer,sizeof(struct LoopExecData),1,file)) {
         printf("Loop ID:%lu\t", buffer.loopID);
-        printf("Duration:%lf\n", buffer.duration);
+        printf("Duration:%.9lf\n", buffer.duration);
     }
     fclose(file);
     return 0;

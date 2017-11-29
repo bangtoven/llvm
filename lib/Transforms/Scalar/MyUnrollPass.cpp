@@ -29,6 +29,9 @@
 using namespace llvm;
 
 static bool MyUnrollRuntime = false;
+static cl::opt<unsigned>
+UnrollDepth("unroll-depth", cl::init(0), cl::Hidden,
+                cl::desc("Decide the depth of unrolling loops"));
 
 namespace {
   class MyUnroll : public LoopPass {
@@ -94,6 +97,8 @@ static unsigned ApproximateLoopSize(const Loop *L, unsigned &NumCalls,
 
 bool MyUnroll::runOnLoop(Loop *L, LPPassManager &LPM) {
     errs() << "This is Jungho's unrolling test.\n";
+    if (!(UnrollDepth == 0 || L->getLoopDepth() == UnrollDepth))
+        return false; // If the user set depth as 0, we unroll every loop. Unless, we only unroll the given depth.
     
     LoopInfo *LI = &getAnalysis<LoopInfo>();
     ScalarEvolution *SE = &getAnalysis<ScalarEvolution>();
