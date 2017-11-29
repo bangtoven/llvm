@@ -1,28 +1,17 @@
 #include <time.h>
 #include <stdio.h>
 
-#define MAX_SIZE 100
-
 struct LoopExecTime {
-    unsigned long loopID;
     clock_t entryTime;
     clock_t exitTime;
 };
-struct LoopExecTime data[MAX_SIZE];
-int count = 0;
+struct LoopExecTime *data;
+unsigned long programID;
 
-int indexOfLoop(unsigned long loop_id) {
-    for (int i=0; i<count; i++) {
-        if (data[i].loopID == loop_id) return i;
-    }
-    return -1; // couldn't find it.
+void prepareMeasuring(unsigned long hash, unsigned long count) {
+    programID = hash;
+    
 }
-
-// double getCurrentTime() {
-//     struct timeval tv;
-//     gettimeofday(&tv, NULL);
-//     return tv.tv_sec + tv.tv_usec/1000000.0;
-// }
 
 void recordEntry(unsigned long loop_id) {
     int index = indexOfLoop(loop_id);
