@@ -33,15 +33,15 @@ void recordExit(unsigned long index) {
 }
 
 void printFinally(unsigned long programID) {
-    FILE *file=fopen("loop_exec_time.bin", "ab");
+    FILE *file=fopen("loop_exec_time.bin", "a"); // for binary it should be ab.
     for (int i=0; i<ARRAY_SIZE; i++) {
         if (data[i].entryTime == 0) continue; // empty item
         
         unsigned long id = programID + i; // hash + index
-        fwrite(&id,sizeof(unsigned long),1,file);
-        
         double duration = data[i].exitTime - data[i].entryTime;
-        fwrite(&duration,sizeof(double),1,file);
+        // fwrite(&id,sizeof(unsigned long),1,file);
+        // fwrite(&duration,sizeof(double),1,file);
+        fprintf(file, "%ld,%lf\n", id, duration);
     }
     fclose(file);
 }
