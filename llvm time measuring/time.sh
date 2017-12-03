@@ -1,5 +1,5 @@
-depth=2
-count=1
+depth=1
+count=2
     
 clang -emit-llvm -o p.bc -c measure_time.c
 clang -emit-llvm -o c.bc -c c_test.c

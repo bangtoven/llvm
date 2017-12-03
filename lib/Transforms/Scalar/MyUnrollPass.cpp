@@ -113,7 +113,7 @@ bool MyUnroll::runOnLoop(Loop *L, LPPassManager &LPM) {
     }
     
     BasicBlock* preheader = L->getLoopPreheader();
-    BasicBlock* exitingBlock = L->getExitBlock();
+    BasicBlock* exitingBlock = L->getExitingBlock()->getPrevNode();
     if (exitingBlock == NULL)
         return false; // don't do anything.
     
@@ -227,7 +227,8 @@ void MyUnroll::runOnExitBlock(BasicBlock* exitingBlock, unsigned long loop_idx) 
     LLVMContext &Ctx = exitingBlock->getContext();
     llvm::Value* arg []= {llvm::ConstantInt::get(Ctx , llvm::APInt( 64,loop_idx ))};
     Instruction *newInst = CallInst::Create(hookFuncRecordFinish, arg, "");
-    newInst->insertBefore(exitingBlock->begin());
+    BasicBlock::iterator pit = exitingBlock->end();
+    newInst->insertBefore(--pit);
 }
 
 /*
@@ -241,26 +242,44 @@ void writeFeatures (Loop *L, unsigned long loopID, unsigned copyCount){
     unsigned num_arithmetic_ops = 0; //number of arithmetic ops in loop
     unsigned num_array_accesses = 0; //number of array accesses in loop
     unsigned num_conditions = 0; // number of conditional instructions
+    unsigned num_stores = 0;
+    unsigned num_loads = 0;
+    unsigned num_float_ops = 0;
+    unsigned num_int_ops = 0;
     for (Loop::block_iterator ii = L->block_begin(), ie = L->block_end(); ii != ie; ++ii) {
         num_instructions += (*ii)->size();
         for (BasicBlock::iterator i = (*ii)->begin(), e = (*ii)->end(); i != e; i++){
-            unsigned opcode = i->getOpcode();
-            if (opcode == Instruction::Add || opcode == Instruction::Sub || opcode == Instruction::Mul
-                || opcode == Instruction::UDiv || opcode == Instruction::SDiv || opcode == Instruction::URem
-                || opcode == Instruction::Shl || opcode == Instruction::LShr || opcode == Instruction::AShr
-                || opcode == Instruction::And || opcode == Instruction::Or || opcode == Instruction::Xor
-                || opcode == Instruction::ICmp || opcode == Instruction::SRem || opcode == Instruction::FAdd
-                || opcode == Instruction::FSub || opcode == Instruction::FMul|| opcode == Instruction::FDiv
-                || opcode == Instruction::FRem || opcode == Instruction::FCmp){
+            if (i->getOpcode() == Instruction::Add || i->getOpcode() == Instruction::Sub || i->getOpcode() == Instruction::Mul
+                || i->getOpcode() == Instruction::UDiv || i->getOpcode() == Instruction::SDiv || i->getOpcode() == Instruction::URem
+                || i->getOpcode() == Instruction::Shl || i->getOpcode() == Instruction::LShr || i->getOpcode() == Instruction::AShr
+                || i->getOpcode() == Instruction::And || i->getOpcode() == Instruction::Or || i->getOpcode() == Instruction::Xor
+                || i->getOpcode() == Instruction::ICmp || i->getOpcode() == Instruction::SRem || i->getOpcode() == Instruction::FAdd
+                || i->getOpcode() == Instruction::FSub || i->getOpcode() == Instruction::FMul|| i->getOpcode() == Instruction::FDiv
+                || i->getOpcode() == Instruction::FRem || i->getOpcode() == Instruction::FCmp){
                 num_arithmetic_ops += 1;
+                if (i->getOpcode() == Instruction::FAdd || i->getOpcode() == Instruction::FSub || i->getOpcode() == Instruction::FMul|| i->getOpcode() == Instruction::FDiv
+                    || i->getOpcode() == Instruction::FRem || i->getOpcode() == Instruction::FCmp){
+                    num_float_ops++;
+                }
+                else {
+                    num_int_ops++;
+                }
             }
-            
             BranchInst* bi = dyn_cast<llvm::BranchInst>(i);
-            if (bi && bi->isConditional()) {
-                num_conditions += 1;
+            if (bi){
+                if (bi->isConditional())
+                {
+                    num_conditions+=1;
+                }
             }
-            
-            if (opcode == Instruction::Load){
+            if (i->getOpcode() == Instruction::Load || i->getOpcode() == Instruction::Store){
+                //get count for stores and loads for features
+                if (i->getOpcode() == Instruction::Load){
+                    num_loads++;
+                }
+                else {
+                    num_stores++;
+                }
                 std::string str;
                 llvm::raw_string_ostream rso(str);
                 (i)->print(rso);
@@ -272,23 +291,36 @@ void writeFeatures (Loop *L, unsigned long loopID, unsigned copyCount){
             }
         }
     }
+    Loop::block_iterator ii = L->block_begin();
+    unsigned func_blocks_count = (*ii)->getParent()->getBasicBlockList().size();
+    unsigned loop_blocks_count = L->getNumBlocks();
+    unsigned loop_depth = L->getLoopDepth();
+    
     //output features to a features file
     string file_name = "loop_features.txt";
-    ofstream fout(file_name, std::ofstream::app | std::ofstream::binary);
-    fout.write((char*) &loopID, sizeof(unsigned long));
-    fout.write((char*) &num_instructions, sizeof(unsigned));
-    fout.write((char*) &num_arithmetic_ops, sizeof(unsigned));
-    fout.write((char*) &num_array_accesses, sizeof(unsigned));
-    fout.write((char*) &num_conditions, sizeof(unsigned));
-    fout.write((char*) &copyCount, sizeof(unsigned));
-//    fout << "Loop_ID: " << loopID;
-//    fout << "\t Instruction count: " << num_instructions;
-//    fout << "\t Arithmetic ops count: " << num_arithmetic_ops;
-//    fout << "\t Array access count: " << num_array_accesses;
-//    fout << "\t Conditional Instruction count: " << num_conditions;
-////    fout << ", Loop Iteration count: " << trip_count;
-//    fout << "\t Unroll factor: " << copyCount;
-//    fout << endl;
+    const char* f_name = file_name.c_str();
+    std::ofstream fout(f_name, std::ofstream::app );
+    /*
+     ofstream fout(file_name, std::ofstream::app | std::ofstream::binary);
+     fout.write((char*) &loopID, sizeof(unsigned long));
+     fout.write((char*) &num_instructions, sizeof(unsigned));
+     fout.write((char*) &num_arithmetic_ops, sizeof(unsigned));
+     fout.write((char*) &num_array_accesses, sizeof(unsigned));
+     fout.write((char*) &num_conditions, sizeof(unsigned));
+     fout.write((char*) &copyCount, sizeof(unsigned));*/
+    /*
+     fout << "Loop_ID: " << loopID;
+     fout << "\t Instruction count: " << num_instructions;
+     fout << "\t Arithmetic ops count: " << num_arithmetic_ops;
+     fout << "\t Array access count: " << num_array_accesses;
+     fout << "\t Conditional Instruction count: " << num_conditions;
+     //fout << ", Loop Iteration count: " << trip_count;
+     fout << "\t Unroll factor: " << copyCount;*/
+    fout << "Loop_ID: " << loopID << ", Inst_count: " << num_instructions<< ", Arith_ops_count: "
+    << num_arithmetic_ops << ", Arr_access_count: " << num_array_accesses << ", Cond_inst_count: "
+    << num_conditions  << ", Int_ops_count: " << num_int_ops << ", Float_ops_count: " << num_float_ops <<
+    ", Loads_count: " << num_loads << ", Stores_count: " << num_stores<< ", BB_in_Loop: " << loop_blocks_count <<
+    ", BB_in_Func: " << func_blocks_count << ", Loop_depth: " << loop_depth << ", Unroll Factor: " << copyCount << "\n";
     fout.close();
 }
 
