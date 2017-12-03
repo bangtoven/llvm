@@ -118,8 +118,7 @@ Pass *createLICMPass();
     Pass *createSLICMPass();
 
     Pass *createMyUnrollPass();
-    Pass *createTimeMeasurePass();
-
+    
 //===----------------------------------------------------------------------===//
 //
 // LoopStrengthReduce - This pass is strength reduces GEP instructions that use
