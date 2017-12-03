@@ -39,9 +39,8 @@ void printFinally(unsigned long programID) {
         
         unsigned long id = programID + i; // hash + index
         double duration = data[i].exitTime - data[i].entryTime;
-        // fwrite(&id,sizeof(unsigned long),1,file);
-        // fwrite(&duration,sizeof(double),1,file);
-        fprintf(file, "%ld,%lf\n", id, duration);
+        fwrite(&id,sizeof(unsigned long),1,file);
+        fwrite(&duration,sizeof(double),1,file);
     }
     fclose(file);
 }
