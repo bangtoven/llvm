@@ -51,6 +51,10 @@ static cl::opt<unsigned>
 MyUnrollCount("unroll-count", cl::init(0), cl::Hidden,
             cl::desc("Use this unroll count for all loops, for testing purposes"));
 
+static unsigned ApproximateLoopSize(const Loop*, unsigned&, bool& , const TargetTransformInfo&);
+static void writeFeatures (unsigned long, Loop* , unsigned );
+static unsigned long hashString(string);
+
 namespace {
     static unsigned long loop_count = 0;
     
@@ -64,9 +68,6 @@ namespace {
         void handleLoop(ScalarEvolution &SE, Loop *L, Function &F);
         void runOnEntryBlock(BasicBlock* Preheader, unsigned long loop_idx, Function &F);
         void runOnExitBlock(BasicBlock* exitingBlock, unsigned long loop_idx, Function &F);
-        
-        void writeFeatures (unsigned long loop_id_hash, Loop *L, unsigned trip_count);
-        unsigned long hashString(string str);
         
     public:
         static char ID;
@@ -176,7 +177,7 @@ void TimeMeasurePass::runOnExitBlock(BasicBlock* exitingBlock, unsigned long loo
  Function writes all features of loops to a file, this file will be used for
  Neural network analysis later.
  */
-void TimeMeasurePass::writeFeatures (unsigned long loop_id_hash, Loop *L, unsigned trip_count){
+void writeFeatures (unsigned long loop_id_hash, Loop *L, unsigned trip_count){
     //setup parameters to get features
     //if loop nests other loop, it adds the features in the nested loops to itself as well
     unsigned num_instructions = 0; //get number of instructions, substitutes for num_statements
@@ -228,8 +229,23 @@ void TimeMeasurePass::writeFeatures (unsigned long loop_id_hash, Loop *L, unsign
     fout.close();
 }
 
+/// ApproximateLoopSize - Approximate the size of the loop.
+static unsigned ApproximateLoopSize(const Loop *L, unsigned &NumCalls, bool &NotDuplicatable, const TargetTransformInfo &TTI) {
+    CodeMetrics Metrics;
+    for (Loop::block_iterator I = L->block_begin(), E = L->block_end(); I != E; ++I)
+        Metrics.analyzeBasicBlock(*I, TTI);
+    NumCalls = Metrics.NumInlineCandidates;
+    NotDuplicatable = Metrics.notDuplicatable;
+    
+    unsigned LoopSize = Metrics.NumInsts;
+    
+    if (LoopSize == 0) LoopSize = 1;
+    
+    return LoopSize;
+}
+
 //hashes c_string to int, makes it easy to pass loop_id to external function
-unsigned long TimeMeasurePass::hashString(string str) {
+static unsigned long hashString(string str) {
     char *c_str = new char[str.length() + 1];
     strcpy(c_str, str.c_str());
     

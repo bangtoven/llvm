@@ -34,7 +34,7 @@ static bool MyUnrollRuntime = true;
 static int MyUnrollCount = 0; // not giving static count.
 
 static cl::opt<unsigned>
-UnrollDepth("unroll-depth", cl::init(0), cl::Hidden, cl::desc("Decide the depth of unrolling loops"));
+MyUnrollDepth("unroll-depth", cl::init(0), cl::Hidden, cl::desc("Decide the depth of unrolling loops"));
 
 namespace {
     class MyUnroll : public LoopPass {
@@ -88,7 +88,7 @@ static unsigned ApproximateLoopSize(const Loop *L, unsigned &NumCalls,
 
 bool MyUnroll::runOnLoop(Loop *L, LPPassManager &LPM) {
     // ********* Added for loop-depth checking
-    if (!(UnrollDepth == 0 || L->getLoopDepth() == UnrollDepth))
+    if (!(MyUnrollDepth == 0 || L->getLoopDepth() == MyUnrollDepth))
         return false; // If the user set depth as 0, we unroll every loop. Unless, we only unroll the given depth.
     
     LoopInfo *LI = &getAnalysis<LoopInfo>();
