@@ -54,3 +54,4 @@ llvm time measuring/c.bc
 llvm time measuring/loop_exec_time.bin
 llvm time measuring/loop_features.txt
 llvm time measuring/p.bc
+llvm time measuring/*.dot
