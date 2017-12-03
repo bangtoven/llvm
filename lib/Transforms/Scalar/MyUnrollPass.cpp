@@ -274,16 +274,21 @@ void writeFeatures (Loop *L, unsigned long loopID, unsigned copyCount){
     }
     //output features to a features file
     string file_name = "loop_features.txt";
-    ofstream fout;
-    fout.open(file_name, std::ofstream::app);
-    fout << "Loop_ID: " << loopID;
-    fout << "\t Instruction count: " << num_instructions;
-    fout << "\t Arithmetic ops count: " << num_arithmetic_ops;
-    fout << "\t Array access count: " << num_array_accesses;
-    fout << "\t Conditional Instruction count: " << num_conditions;
-//    fout << ", Loop Iteration count: " << trip_count;
-    fout << "\t Unroll factor: " << copyCount;
-    fout << endl;
+    ofstream fout(file_name, std::ofstream::app | std::ofstream::binary);
+    fout.write((char*) &loopID, sizeof(unsigned long));
+    fout.write((char*) &num_instructions, sizeof(unsigned));
+    fout.write((char*) &num_arithmetic_ops, sizeof(unsigned));
+    fout.write((char*) &num_array_accesses, sizeof(unsigned));
+    fout.write((char*) &num_conditions, sizeof(unsigned));
+    fout.write((char*) &copyCount, sizeof(unsigned));
+//    fout << "Loop_ID: " << loopID;
+//    fout << "\t Instruction count: " << num_instructions;
+//    fout << "\t Arithmetic ops count: " << num_arithmetic_ops;
+//    fout << "\t Array access count: " << num_array_accesses;
+//    fout << "\t Conditional Instruction count: " << num_conditions;
+////    fout << ", Loop Iteration count: " << trip_count;
+//    fout << "\t Unroll factor: " << copyCount;
+//    fout << endl;
     fout.close();
 }
 
