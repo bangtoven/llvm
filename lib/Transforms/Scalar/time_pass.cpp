@@ -91,11 +91,36 @@ namespace {
 }
 
 char TimeMeasurePass::ID = 0;
-static RegisterPass<TimeMeasurePass> X("mytimepass", "my Pass", false, false);
+static RegisterPass<TimeMeasurePass> X("mytimepass", "my unroll pass", false, false);
 
 #ifdef JB_LOCAL_ENV
 Pass *llvm::createTimeMeasurePass() { return new TimeMeasurePass(); }
 #endif
+
+void TimeMeasurePass::handleLoop(ScalarEvolution &SE, Loop *L, Function &F){
+    if (F.getName() == "printFinally")
+        return;
+    
+    //get preheader and loop exit to insert time instruction
+    BasicBlock* Preheader = L->getLoopPreheader();
+    BasicBlock* exitingBlock = L->getExitBlock();
+    if (exitingBlock == NULL)
+        return;
+    
+    unsigned long loop_index = loop_count;
+    ++loop_count;
+    
+    unsigned long mod_hash = hashString(F.getParent()->getModuleIdentifier());
+    unsigned long loop_id_hash = mod_hash + loop_index;
+    unsigned trip_count = SE.getSmallConstantTripCount(L, L->getExitBlock());
+    writeFeatures(loop_id_hash, L, trip_count);
+    
+    runOnEntryBlock(Preheader, loop_index, F);
+    for (LoopInfo::iterator LIT = L->getSubLoops().begin(), LEND = L->getSubLoops().end(); LIT != LEND; ++LIT) {
+        handleLoop(SE, *LIT, F);
+    }
+    runOnExitBlock(exitingBlock,loop_index, F);
+}
 
 bool TimeMeasurePass::runOnFunction (Function &F) {
     setHookFunctions(F);
@@ -129,32 +154,6 @@ void TimeMeasurePass::setHookFunctions(Function &F) {
     hookFuncRecordStart = F.getParent()->getOrInsertFunction("recordEntry", recordFuncType);
     hookFuncRecordFinish = F.getParent()->getOrInsertFunction("recordExit", recordFuncType);
     hookFuncFinal = F.getParent()->getOrInsertFunction("printFinally", finalFuncType);
-}
-
-void TimeMeasurePass::handleLoop(ScalarEvolution &SE, Loop *L, Function &F){
-    if (F.getName() == "printFinally")
-        return;
-    
-    unsigned long mod_hash = hashString(F.getParent()->getModuleIdentifier());
-    
-    //get preheader and loop exit to insert time instruction
-    BasicBlock* Preheader = L->getLoopPreheader();
-    BasicBlock* exitingBlock = L->getExitBlock();
-    if (exitingBlock == NULL)
-        return;
-    
-    unsigned long loop_index = loop_count;
-    ++loop_count;
-    
-    unsigned long loop_id_hash = mod_hash + loop_index;
-    unsigned trip_count = SE.getSmallConstantTripCount(L, L->getExitBlock());
-    writeFeatures(loop_id_hash, L, trip_count);
-    
-    runOnEntryBlock(Preheader, loop_index, F);
-    for (LoopInfo::iterator LIT = L->getSubLoops().begin(), LEND = L->getSubLoops().end(); LIT != LEND; ++LIT) {
-        handleLoop(SE, *LIT, F);
-    }
-    runOnExitBlock(exitingBlock,loop_index, F);
 }
 
 void TimeMeasurePass::runOnEntryBlock(BasicBlock* Preheader, unsigned long loop_idx, Function &F) {

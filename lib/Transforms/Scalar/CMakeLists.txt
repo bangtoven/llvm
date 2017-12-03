@@ -1,7 +1,6 @@
 include_directories(include)
 
 add_llvm_library(LLVMScalarOpts
-  time_pass.cpp
   slicm.cpp
   MyUnrollPass.cpp
   LAMPProfiling.cpp
