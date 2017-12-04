@@ -5,18 +5,15 @@
 
 #define ARRAY_SIZE 1000
 
-unsigned long programID;
-
 typedef struct LoopExecTime {
     double entryTime;
     double exitTime;
 } LoopExecTime;
 LoopExecTime data[ARRAY_SIZE];
 
+unsigned long copyCount;
+
 double getCurrentTime() {
-//    struct timeval tv;
-//    gettimeofday(&tv, NULL);
-//    return tv.tv_sec + tv.tv_usec/1000000.0;
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + ts.tv_nsec/1000000000.0;
@@ -32,15 +29,21 @@ void recordExit(unsigned long index) {
     data[index].exitTime = getCurrentTime();
 }
 
+void setCopyCount(unsigned long count) {
+	copyCount = count;
+}
+
 void printFinally(unsigned long programID) {
-    FILE *file=fopen("loop_exec_time.bin", "a"); // for binary it should be ab.
+    FILE *file = fopen("loop_exec_time.txt", "a"); // for binary it should be ab.
     for (int i=0; i<ARRAY_SIZE; i++) {
         if (data[i].entryTime == 0) continue; // empty item
         
-        unsigned long id = programID + i; // hash + index
+        unsigned long id = programID*100 + i; // hash + index
         double duration = data[i].exitTime - data[i].entryTime;
-        fwrite(&id,sizeof(unsigned long),1,file);
-        fwrite(&duration,sizeof(double),1,file);
+        // fwrite(&id,sizeof(unsigned long),1,file);
+        // fwrite(&copyCount,sizeof(unsigned long),1,file);
+        // fwrite(&duration,sizeof(double),1,file);
+        fprintf(file, "%ld, %ld, %.9lf\n", id, copyCount, duration);
     }
     fclose(file);
 }

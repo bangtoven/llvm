@@ -48,7 +48,7 @@ static cl::opt<unsigned>
 MyUnrollDepth("my-depth", cl::init(0), cl::Hidden, cl::desc("Decide the depth of unrolling loops"));
 
 static unsigned ApproximateLoopSize(const Loop*, unsigned&, bool& , const TargetTransformInfo&);
-static void writeFeatures (Loop* L, unsigned long loopID, unsigned copyCount);
+static void writeFeatures (Loop* L, unsigned long loopID);
 
 namespace {
     class MyUnroll : public LoopPass {
@@ -59,7 +59,6 @@ namespace {
         bool hookFunctionsSetDone = false;
         Constant *hookFuncRecordStart;
         Constant *hookFuncRecordFinish;
-        Constant *hookFuncFinal;
         
         bool unrolling(Loop *L, LPPassManager &LPM);
         
@@ -119,7 +118,7 @@ bool MyUnroll::runOnLoop(Loop *L, LPPassManager &LPM) {
     
 
     // -------------- Do something!!
-    writeFeatures(L, moduleHash + loopIndex, MyUnrollCount);
+    writeFeatures(L, moduleHash*100 + loopIndex);
     
     runOnEntryBlock(preheader, loopIndex);
     runOnExitBlock(exitingBlock, loopIndex);
@@ -202,17 +201,23 @@ void MyUnroll::setHookFunctions(Module *m) {
     
     hookFuncRecordStart = m->getOrInsertFunction("recordEntry", funcType);
     hookFuncRecordFinish = m->getOrInsertFunction("recordExit", funcType);
-    hookFuncFinal = m->getOrInsertFunction("printFinally", funcType);
+    
+    Constant *hookFuncCopyCount = m->getOrInsertFunction("setCopyCount", funcType);
+    Constant *hookFuncPrint = m->getOrInsertFunction("printFinally", funcType);
     
     hash<string> hashFunc;
     moduleHash = hashFunc(m->getModuleIdentifier());
-    llvm::Value* arg []= {llvm::ConstantInt::get(Ctx , llvm::APInt( 64, moduleHash))};
-    Instruction *newInst = CallInst::Create(hookFuncFinal, arg, "");
+    llvm::Value* argHash []= {llvm::ConstantInt::get(Ctx , llvm::APInt( 64, moduleHash))};
+    Instruction *printInst = CallInst::Create(hookFuncPrint, argHash, "");
+    
+    llvm::Value* argCount []= {llvm::ConstantInt::get(Ctx , llvm::APInt( 64, MyUnrollCount))};
+    Instruction *countInst = CallInst::Create(hookFuncCopyCount, argCount, "");
     
     Function *main = m->getFunction("main");
     Function::iterator bit = main->end();
     BasicBlock::iterator iit = (--bit)->end();
-    newInst->insertBefore(--iit);
+    printInst->insertBefore(--iit);
+    countInst->insertBefore(printInst);
 }
 
 void MyUnroll::runOnEntryBlock(BasicBlock* preheader, unsigned long loop_idx) {
@@ -235,7 +240,7 @@ void MyUnroll::runOnExitBlock(BasicBlock* exitingBlock, unsigned long loop_idx) 
  Function writes all features of loops to a file, this file will be used for
  Neural network analysis later.
  */
-void writeFeatures (Loop *L, unsigned long loopID, unsigned copyCount){
+void writeFeatures (Loop *L, unsigned long loopID){
     //setup parameters to get features
     //if loop nests other loop, it adds the features in the nested loops to itself as well
     unsigned num_instructions = 0; //get number of instructions, substitutes for num_statements
@@ -320,7 +325,7 @@ void writeFeatures (Loop *L, unsigned long loopID, unsigned copyCount){
     << num_arithmetic_ops << ", Arr_access_count: " << num_array_accesses << ", Cond_inst_count: "
     << num_conditions  << ", Int_ops_count: " << num_int_ops << ", Float_ops_count: " << num_float_ops <<
     ", Loads_count: " << num_loads << ", Stores_count: " << num_stores<< ", BB_in_Loop: " << loop_blocks_count <<
-    ", BB_in_Func: " << func_blocks_count << ", Loop_depth: " << loop_depth << ", Unroll Factor: " << copyCount << "\n";
+    ", BB_in_Func: " << func_blocks_count << ", Loop_depth: " << loop_depth << "\n";
     fout.close();
 }
 
