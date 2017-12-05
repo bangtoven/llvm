@@ -112,7 +112,7 @@ bool MyUnroll::runOnLoop(Loop *L, LPPassManager &LPM) {
     }
     
     BasicBlock* preheader = L->getLoopPreheader();
-    BasicBlock* exitingBlock = L->getExitingBlock()->getPrevNode();
+    BasicBlock* exitingBlock = L->getExitBlock();
     if (exitingBlock == NULL)
         return false; // don't do anything.
     
