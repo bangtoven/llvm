@@ -107,7 +107,7 @@ bool MyUnroll::runOnLoop(Loop *L, LPPassManager &LPM) {
         return false;
     
     if (L->getLoopDepth() != MyUnrollDepth) {// not the depth we want
-        errs() << "Depth: " << L->getLoopDepth() << " is not the depth provided.\n";
+//        errs() << "Depth: " << L->getLoopDepth() << " is not the depth provided.\n";
         return false; // don't do anything, just increment the index
     }
     
@@ -290,7 +290,7 @@ void writeFeatures (Loop *L, unsigned long loopID){
                 (i)->print(rso);
                 std::size_t found = str.find("arrayidx");
                 if (found!=std::string::npos){
-                    (i)->dump();
+//                    (i)->dump();
                     num_array_accesses+=1;
                 }
             }
