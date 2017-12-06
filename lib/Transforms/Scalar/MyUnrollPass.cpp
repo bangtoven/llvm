@@ -214,10 +214,12 @@ void MyUnroll::setHookFunctions(Module *m) {
     Instruction *countInst = CallInst::Create(hookFuncCopyCount, argCount, "");
     
     Function *main = m->getFunction("main");
+    BasicBlock::iterator first = main->begin()->begin();
+    countInst->insertAfter(first);
+    
     Function::iterator bit = main->end();
     BasicBlock::iterator iit = (--bit)->end();
     printInst->insertBefore(--iit);
-    countInst->insertBefore(printInst);
 }
 
 void MyUnroll::runOnEntryBlock(BasicBlock* preheader, unsigned long loop_idx) {

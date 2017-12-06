@@ -1,22 +1,23 @@
 #include <time.h>
 #include <sys/time.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 
 #define ARRAY_SIZE 1000
 
 typedef struct LoopExecTime {
-    double entryTime;
-    double exitTime;
+    unsigned long entryTime;
+    unsigned long exitTime;
 } LoopExecTime;
 LoopExecTime data[ARRAY_SIZE];
 
 unsigned long copyCount;
 
-double getCurrentTime() {
+unsigned long getCurrentTime() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec + ts.tv_nsec/1000000000.0;
+    return ts.tv_sec*1000000000.0 + ts.tv_nsec;
 }
 
 void recordEntry(unsigned long index) {
@@ -31,6 +32,7 @@ void recordExit(unsigned long index) {
 
 void setCopyCount(unsigned long count) {
 	copyCount = count;
+    memset(data, 0, sizeof(LoopExecTime)*ARRAY_SIZE);
 }
 
 void printFinally(unsigned long programID) {
@@ -39,11 +41,11 @@ void printFinally(unsigned long programID) {
         if (data[i].entryTime == 0) continue; // empty item
         
         unsigned long id = programID*100 + i; // hash + index
-        double duration = data[i].exitTime - data[i].entryTime;
+        unsigned long duration = data[i].exitTime - data[i].entryTime;
         // fwrite(&id,sizeof(unsigned long),1,file);
         // fwrite(&copyCount,sizeof(unsigned long),1,file);
         // fwrite(&duration,sizeof(double),1,file);
-        fprintf(file, "%ld, %ld, %.9lf\n", id, copyCount, duration);
+        fprintf(file, "%ld, %ld, %ld\n", id, copyCount, duration);
     }
     fclose(file);
 }
